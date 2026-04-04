@@ -1,0 +1,24 @@
+feature,importance
+family_member,0.5231672573971463
+education_level,0.15141127286526335
+age,0.12225566867736117
+year,0.10162073569295176
+marriage_label_Not applicable,0.04329408541032318
+region_label_Seoul,0.007561413613870608
+region_label_Gyeonggi,0.007464908604005713
+region_label_South Gyeongsang,0.007464781852680534
+region_label_Jeolla and Jeju,0.005856130036069834
+religion_label_Has religion,0.0056222456080415786
+religion_label_No religion,0.005400006378827283
+region_label_North Gyeongsang,0.003808926857913849
+region_label_South Chungcheong,0.003240037251015932
+gender_label_Male,0.002559636036347526
+region_label_Gangwon and North Chungcheong,0.0022823615601675865
+gender_label_Female,0.0022671299839602263
+marriage_label_Married,0.0018458572973322545
+marriage_label_Separated due to widowhood,0.0018176754211062746
+marriage_label_Single,0.0009057437598857221
+marriage_label_Separated,0.0001541256957294516
+marriage_label_Unknown,0.0
+marriage_label_Other,0.0
+religion_label_Unknown,0.0
