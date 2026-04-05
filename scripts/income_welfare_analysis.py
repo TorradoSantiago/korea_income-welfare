@@ -9,9 +9,9 @@ import pandas as pd
 import seaborn as sns
 import statsmodels.formula.api as smf
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import ElasticNet, LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
@@ -66,10 +66,13 @@ RELIGION_LABELS = {
     9: 'Unknown',
 }
 
+NUMERIC_FEATURES = ['education_level', 'age', 'family_member', 'year']
+CATEGORICAL_FEATURES = ['region_label', 'gender_label', 'marriage_label', 'religion_label']
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Generate reusable outputs and econometric benchmarks for the Korea income and welfare project.'
+        description='Generate reusable outputs and econometric plus ML benchmarks for the Korea income and welfare project.'
     )
     parser.add_argument(
         '--input-path',
@@ -114,14 +117,13 @@ def build_analysis_frame(dataframe: pd.DataFrame) -> pd.DataFrame:
     return analysis_frame
 
 
-def trim_target_outliers(dataframe: pd.DataFrame) -> pd.DataFrame:
-    q1 = dataframe['income_usd'].quantile(0.25)
-    q3 = dataframe['income_usd'].quantile(0.75)
+def trim_target_outliers(dataframe: pd.DataFrame, target_column: str) -> pd.DataFrame:
+    q1 = dataframe[target_column].quantile(0.25)
+    q3 = dataframe[target_column].quantile(0.75)
     iqr = q3 - q1
     lower_bound = q1 - 1.5 * iqr
     upper_bound = q3 + 1.5 * iqr
-
-    return dataframe.loc[dataframe['income_usd'].between(lower_bound, upper_bound)].copy()
+    return dataframe.loc[dataframe[target_column].between(lower_bound, upper_bound)].copy()
 
 
 def build_model_frame(analysis_frame: pd.DataFrame) -> pd.DataFrame:
@@ -139,7 +141,7 @@ def build_model_frame(analysis_frame: pd.DataFrame) -> pd.DataFrame:
         ]
     ].dropna().copy()
 
-    model_frame = trim_target_outliers(model_frame)
+    model_frame = trim_target_outliers(model_frame, 'income_usd')
     model_frame['log_income_usd'] = np.log(model_frame['income_usd'])
     return model_frame
 
@@ -187,7 +189,60 @@ def build_year_summary(dataframe: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def evaluate_model(model_name: str, y_true: pd.Series, y_pred: pd.Series) -> dict[str, float | str]:
+def get_linear_preprocessor() -> ColumnTransformer:
+    return ColumnTransformer(
+        transformers=[
+            (
+                'numeric',
+                Pipeline(
+                    steps=[
+                        ('imputer', SimpleImputer(strategy='median')),
+                        ('scaler', StandardScaler()),
+                    ]
+                ),
+                NUMERIC_FEATURES,
+            ),
+            (
+                'categorical',
+                Pipeline(
+                    steps=[
+                        ('imputer', SimpleImputer(strategy='most_frequent')),
+                        ('encoder', OneHotEncoder(handle_unknown='ignore')),
+                    ]
+                ),
+                CATEGORICAL_FEATURES,
+            ),
+        ]
+    )
+
+
+def get_tree_preprocessor() -> ColumnTransformer:
+    return ColumnTransformer(
+        transformers=[
+            ('numeric', SimpleImputer(strategy='median'), NUMERIC_FEATURES),
+            (
+                'categorical',
+                Pipeline(
+                    steps=[
+                        ('imputer', SimpleImputer(strategy='most_frequent')),
+                        ('encoder', OneHotEncoder(handle_unknown='ignore')),
+                    ]
+                ),
+                CATEGORICAL_FEATURES,
+            ),
+        ]
+    )
+
+
+def collapse_feature_name(feature_name: str) -> str:
+    clean_name = feature_name.replace('numeric__', '').replace('categorical__', '')
+    for base_feature in NUMERIC_FEATURES + CATEGORICAL_FEATURES:
+        if clean_name == base_feature or clean_name.startswith(f'{base_feature}_'):
+            return base_feature
+    return clean_name
+
+
+def evaluate_model(model_name: str, y_true: pd.Series, y_pred: np.ndarray) -> dict[str, float | str]:
     return {
         'model': model_name,
         'mae_usd': mean_absolute_error(y_true, y_pred),
@@ -196,12 +251,10 @@ def evaluate_model(model_name: str, y_true: pd.Series, y_pred: pd.Series) -> dic
     }
 
 
-def run_models(model_frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def run_models(model_frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     target = model_frame['income_usd']
     education_only = model_frame[['education_level']]
-    multivariable_features = model_frame[
-        ['education_level', 'age', 'family_member', 'year', 'region_label', 'gender_label', 'marriage_label', 'religion_label']
-    ]
+    multivariable_features = model_frame[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
 
     X_train_edu, X_test_edu, y_train_edu, y_test_edu = train_test_split(
         education_only, target, test_size=0.3, random_state=42
@@ -214,96 +267,110 @@ def run_models(model_frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         multivariable_features, target, test_size=0.3, random_state=42
     )
 
-    numeric_features = ['education_level', 'age', 'family_member', 'year']
-    categorical_features = ['region_label', 'gender_label', 'marriage_label', 'religion_label']
-
-    linear_preprocessor = ColumnTransformer(
-        transformers=[
-            (
-                'numeric',
-                Pipeline(
-                    steps=[
-                        ('imputer', SimpleImputer(strategy='median')),
-                        ('scaler', StandardScaler()),
-                    ]
+    models: dict[str, Pipeline] = {
+        'Elastic Net': Pipeline(
+            steps=[
+                ('preprocessor', get_linear_preprocessor()),
+                ('model', ElasticNet(alpha=0.001, l1_ratio=0.1, max_iter=10000)),
+            ]
+        ),
+        'Multivariable linear regression': Pipeline(
+            steps=[
+                ('preprocessor', get_linear_preprocessor()),
+                ('model', LinearRegression()),
+            ]
+        ),
+        'Gradient boosting': Pipeline(
+            steps=[
+                ('preprocessor', get_tree_preprocessor()),
+                (
+                    'model',
+                    GradientBoostingRegressor(
+                        n_estimators=250,
+                        learning_rate=0.05,
+                        max_depth=3,
+                        subsample=0.8,
+                        random_state=42,
+                    ),
                 ),
-                numeric_features,
-            ),
-            (
-                'categorical',
-                Pipeline(
-                    steps=[
-                        ('imputer', SimpleImputer(strategy='most_frequent')),
-                        ('encoder', OneHotEncoder(handle_unknown='ignore')),
-                    ]
+            ]
+        ),
+        'Tuned random forest': Pipeline(
+            steps=[
+                ('preprocessor', get_tree_preprocessor()),
+                (
+                    'model',
+                    RandomForestRegressor(
+                        n_estimators=400,
+                        max_depth=16,
+                        min_samples_leaf=3,
+                        random_state=42,
+                        n_jobs=-1,
+                    ),
                 ),
-                categorical_features,
-            ),
-        ]
-    )
+            ]
+        ),
+    }
 
-    forest_preprocessor = ColumnTransformer(
-        transformers=[
-            ('numeric', SimpleImputer(strategy='median'), numeric_features),
-            (
-                'categorical',
-                Pipeline(
-                    steps=[
-                        ('imputer', SimpleImputer(strategy='most_frequent')),
-                        ('encoder', OneHotEncoder(handle_unknown='ignore')),
-                    ]
-                ),
-                categorical_features,
-            ),
-        ]
-    )
+    metrics_rows = [evaluate_model('Education-only linear regression', y_test_edu, education_only_predictions)]
+    best_model_name = 'Education-only linear regression'
+    best_r2 = float(metrics_rows[0]['r2'])
+    best_model: Pipeline | None = None
 
-    multivariable_linear_model = Pipeline(
-        steps=[
-            ('preprocessor', linear_preprocessor),
-            ('model', LinearRegression()),
-        ]
-    )
-    multivariable_linear_model.fit(X_train_multi, y_train_multi)
-    multivariable_linear_predictions = multivariable_linear_model.predict(X_test_multi)
+    for model_name, model in models.items():
+        model.fit(X_train_multi, y_train_multi)
+        predictions = model.predict(X_test_multi)
+        metrics = evaluate_model(model_name, y_test_multi, predictions)
+        metrics_rows.append(metrics)
+        if metrics['r2'] > best_r2:
+            best_r2 = float(metrics['r2'])
+            best_model_name = model_name
+            best_model = model
 
-    random_forest_model = Pipeline(
-        steps=[
-            ('preprocessor', forest_preprocessor),
-            (
-                'model',
-                RandomForestRegressor(
-                    n_estimators=300,
-                    min_samples_leaf=10,
-                    random_state=42,
-                    n_jobs=-1,
-                ),
-            ),
-        ]
-    )
-    random_forest_model.fit(X_train_multi, y_train_multi)
-    random_forest_predictions = random_forest_model.predict(X_test_multi)
+    model_comparison = pd.DataFrame(metrics_rows).sort_values('r2', ascending=False)
 
-    model_comparison = pd.DataFrame(
+    if best_model is None:
+        # The tuned random forest should dominate the education-only baseline, but keep a safe fallback.
+        best_model = models['Tuned random forest']
+        best_model.fit(X_train_multi, y_train_multi)
+        best_model_name = 'Tuned random forest'
+
+    best_estimator = best_model.named_steps['model']
+    best_params = pd.DataFrame(
         [
-            evaluate_model('Education-only linear regression', y_test_edu, education_only_predictions),
-            evaluate_model('Multivariable linear regression', y_test_multi, multivariable_linear_predictions),
-            evaluate_model('Multivariable random forest', y_test_multi, random_forest_predictions),
+            {'model': best_model_name, 'parameter': key, 'value': value}
+            for key, value in best_estimator.get_params().items()
+            if key in {'alpha', 'l1_ratio', 'learning_rate', 'max_depth', 'min_samples_leaf', 'n_estimators', 'subsample'}
         ]
-    ).sort_values('r2', ascending=False)
+    )
 
-    feature_names = random_forest_model.named_steps['preprocessor'].get_feature_names_out()
-    feature_importance = pd.DataFrame(
+    if hasattr(best_estimator, 'feature_importances_'):
+        feature_names = best_model.named_steps['preprocessor'].get_feature_names_out()
+        feature_importance = pd.DataFrame(
+            {
+                'feature': feature_names,
+                'importance': best_estimator.feature_importances_,
+            }
+        )
+        feature_importance['feature_group'] = feature_importance['feature'].map(collapse_feature_name)
+        feature_importance = (
+            feature_importance.groupby('feature_group', as_index=False)['importance']
+            .sum()
+            .sort_values('importance', ascending=False)
+        )
+    else:
+        feature_importance = pd.DataFrame(columns=['feature_group', 'importance'])
+
+    best_predictions = best_model.predict(X_test_multi)
+    prediction_frame = pd.DataFrame(
         {
-            'feature': feature_names,
-            'importance': random_forest_model.named_steps['model'].feature_importances_,
+            'actual_income': y_test_multi,
+            'predicted_income': best_predictions,
+            'model': best_model_name,
         }
-    ).sort_values('importance', ascending=False)
+    ).reset_index(drop=True)
 
-    feature_importance['feature'] = feature_importance['feature'].str.replace('numeric__', '', regex=False)
-    feature_importance['feature'] = feature_importance['feature'].str.replace('categorical__', '', regex=False)
-
-    return model_comparison, feature_importance
+    return model_comparison, feature_importance, best_params, prediction_frame
 
 
 def run_econometric_models(model_frame: pd.DataFrame):
@@ -377,6 +444,7 @@ def export_tables(
     year_summary: pd.DataFrame,
     model_comparison: pd.DataFrame,
     feature_importance: pd.DataFrame,
+    best_params: pd.DataFrame,
     ols_summary: pd.DataFrame,
     quantile_summary: pd.DataFrame,
 ) -> None:
@@ -385,6 +453,7 @@ def export_tables(
     year_summary.to_csv(TABLES_DIR / 'year_income_summary.csv', index=False)
     model_comparison.to_csv(TABLES_DIR / 'model_comparison.csv', index=False)
     feature_importance.to_csv(TABLES_DIR / 'feature_importance.csv', index=False)
+    best_params.to_csv(TABLES_DIR / 'ml_best_params.csv', index=False)
     ols_summary.to_csv(TABLES_DIR / 'econometric_ols_summary.csv', index=False)
     quantile_summary.to_csv(TABLES_DIR / 'quantile_regression_summary.csv', index=False)
 
@@ -393,9 +462,11 @@ def export_figures(
     education_summary: pd.DataFrame,
     region_summary: pd.DataFrame,
     year_summary: pd.DataFrame,
+    model_comparison: pd.DataFrame,
     feature_importance: pd.DataFrame,
     ols_summary: pd.DataFrame,
     quantile_summary: pd.DataFrame,
+    prediction_frame: pd.DataFrame,
 ) -> None:
     sns.set_theme(style='whitegrid')
 
@@ -450,12 +521,12 @@ def export_figures(
     sns.barplot(
         data=top_features,
         x='importance',
-        y='feature',
+        y='feature_group',
         color='#7a4cc2',
     )
-    plt.title('Top random-forest feature importances')
+    plt.title('Top feature groups in the tuned random forest')
     plt.xlabel('Importance')
-    plt.ylabel('Feature')
+    plt.ylabel('Feature group')
     plt.tight_layout()
     plt.savefig(FIGURES_DIR / 'top_feature_importance.png', dpi=150)
     plt.close()
@@ -471,20 +542,16 @@ def export_figures(
                         ),
                         'ci_low_pct': (
                             np.exp(float(ols_summary.loc[ols_summary['term'] == 'education_level', 'ci_low'].iloc[0])) - 1
-                        )
-                        * 100,
+                        ) * 100,
                         'ci_high_pct': (
                             np.exp(float(ols_summary.loc[ols_summary['term'] == 'education_level', 'ci_high'].iloc[0])) - 1
-                        )
-                        * 100,
+                        ) * 100,
                     }
                 ]
             ),
-            quantile_summary.rename(
-                columns={
-                    'education_pct_premium': 'premium_pct',
-                }
-            )[['model', 'premium_pct', 'education_ci_low', 'education_ci_high']].assign(
+            quantile_summary.rename(columns={'education_pct_premium': 'premium_pct'})[
+                ['model', 'premium_pct', 'education_ci_low', 'education_ci_high']
+            ].assign(
                 ci_low_pct=lambda frame: (np.exp(frame['education_ci_low']) - 1) * 100,
                 ci_high_pct=lambda frame: (np.exp(frame['education_ci_high']) - 1) * 100,
             )[['model', 'premium_pct', 'ci_low_pct', 'ci_high_pct']],
@@ -514,6 +581,29 @@ def export_figures(
     plt.title('Education premium across mean and quantile regressions')
     plt.tight_layout()
     plt.savefig(FIGURES_DIR / 'education_premium_by_quantile.png', dpi=150)
+    plt.close()
+
+    plt.figure(figsize=(11, 6))
+    sns.barplot(data=model_comparison, x='model', y='r2', color='#2e8b57')
+    plt.title('Out-of-sample model comparison')
+    plt.xlabel('Model')
+    plt.ylabel('R-squared')
+    plt.xticks(rotation=20, ha='right')
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / 'model_performance_r2.png', dpi=150)
+    plt.close()
+
+    plt.figure(figsize=(7, 7))
+    plot_frame = prediction_frame.copy().sort_values('actual_income')
+    sns.scatterplot(data=plot_frame, x='actual_income', y='predicted_income', s=18, alpha=0.45, color='#1f4b6e')
+    min_value = min(plot_frame['actual_income'].min(), plot_frame['predicted_income'].min())
+    max_value = max(plot_frame['actual_income'].max(), plot_frame['predicted_income'].max())
+    plt.plot([min_value, max_value], [min_value, max_value], color='#b94a48', linewidth=1.5)
+    plt.title('Actual vs predicted income in the tuned random forest')
+    plt.xlabel('Actual income (USD)')
+    plt.ylabel('Predicted income (USD)')
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / 'actual_vs_predicted_income.png', dpi=150)
     plt.close()
 
 
@@ -557,7 +647,7 @@ def main() -> None:
     education_summary = build_education_summary(analysis_frame)
     region_summary = build_region_summary(analysis_frame)
     year_summary = build_year_summary(analysis_frame)
-    model_comparison, feature_importance = run_models(model_frame)
+    model_comparison, feature_importance, best_params, prediction_frame = run_models(model_frame)
     ols_model, quantile_models = run_econometric_models(model_frame)
     ols_summary = build_ols_summary(ols_model)
     quantile_summary = build_quantile_summary(quantile_models)
@@ -568,6 +658,7 @@ def main() -> None:
         year_summary,
         model_comparison,
         feature_importance,
+        best_params,
         ols_summary,
         quantile_summary,
     )
@@ -575,9 +666,11 @@ def main() -> None:
         education_summary,
         region_summary,
         year_summary,
+        model_comparison,
         feature_importance,
         ols_summary,
         quantile_summary,
+        prediction_frame,
     )
     print_summary(
         analysis_frame,

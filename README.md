@@ -1,6 +1,6 @@
 ﻿# Korea Income & Welfare
 
-Portfolio-grade case study on Korean welfare microdata that now combines machine-learning benchmarking with an econometric earnings analysis. The repository still answers the original question about education and income, but it now does so with two complementary lenses: predictive performance and interpretable coefficient-based inference.
+Portfolio-grade case study on Korean welfare microdata that combines machine-learning benchmarking with an econometric earnings analysis. The repository still answers the original question about education and income, but it now does so with two complementary lenses: predictive performance and interpretable coefficient-based inference.
 
 If you want a short, non-technical explanation first, start with `BRIEF.md`.
 
@@ -9,10 +9,14 @@ If you want a short, non-technical explanation first, start with `BRIEF.md`.
 - Dataset: `92,857` survey records and `14` raw variables.
 - Valid analysis sample: `89,935` records.
 - Trimmed modeling sample used for ML and econometrics: `86,313` records.
-- Best predictive benchmark: Multivariable Random Forest (`MAE = 908.88`, `RMSE = 1279.94`, `R^2 = 0.628`).
+- Best predictive benchmark: Tuned Random Forest (`MAE = 880.05`, `RMSE = 1249.11`, `R^2 = 0.645`).
+- Main tuned hyperparameters:
+  - `n_estimators = 400`
+  - `max_depth = 16`
+  - `min_samples_leaf = 3`
 - Econometric layer:
   - each education step is associated with a `12.47%` income premium in the OLS semilog model;
-  - the estimated education premium rises across the income distribution, from `11.46%` at the 25th percentile to `14.17%` at the 75th percentile.
+  - the estimated education premium rises from `11.46%` at the 25th percentile to `14.17%` at the 75th percentile.
 - Senior takeaway: education matters, but its payoff is heterogeneous and becomes more pronounced in the upper half of the income distribution.
 
 ## Business and Policy Relevance
@@ -33,29 +37,23 @@ How much of individual income can education explain, how much additional signal 
 1. Load and profile the welfare microdata.
 2. Map coded fields into readable labels and convert income to USD.
 3. Filter invalid observations and trim target outliers with the IQR rule.
-4. Benchmark three predictive models on the same target:
+4. Benchmark five predictive models on the same target:
    - Education-only Linear Regression
+   - Elastic Net
    - Multivariable Linear Regression
-   - Multivariable Random Forest Regressor
+   - Gradient Boosting
+   - Tuned Random Forest
 5. Estimate a semilog OLS model for income.
 6. Estimate quantile regressions at the 25th, 50th, and 75th percentiles.
-7. Export reusable tables and charts for portfolio, interviews, and LinkedIn content.
+7. Export reusable charts, tables, and a PDF brief for portfolio and interview use.
 
 ## Key Findings
 
 - Income rises steadily across the education ladder, which supports the central hypothesis.
-- The multivariable random forest remains the strongest predictive benchmark, confirming that household structure, age, time, and region matter alongside education.
+- The tuned random forest becomes the strongest predictive benchmark and materially outperforms the original education-only baseline (`R^2 = 0.645` vs `0.294`).
+- The most important feature in the best ML model is `family_member`, followed by `age`, `education_level`, and `year`.
 - In the econometric layer, one additional education step is associated with a `12.47%` increase in income on average.
 - The return to education is not constant across the distribution: it is lower in the 25th percentile (`11.46%`) and higher in the 75th percentile (`14.17%`).
-- That heterogeneity matters. It suggests education is not just shifting the mean; it is linked to larger payoffs in better-paid segments of the sample.
-
-## Model Comparison
-
-| Model | MAE (USD) | RMSE (USD) | R^2 |
-| --- | ---: | ---: | ---: |
-| Education-only linear regression | 1345.40 | 1762.56 | 0.294 |
-| Multivariable linear regression | 1049.83 | 1414.49 | 0.545 |
-| Multivariable random forest | 908.88 | 1279.94 | 0.628 |
 
 ## Repository Structure
 
@@ -64,15 +62,17 @@ How much of individual income can education explain, how much additional signal 
 - `Korea_Income_and_Welfare.csv`: source dataset
 - `BRIEF.md`: short explanation for non-technical readers
 - `docs/executive-summary.md`: polished findings and portfolio framing
+- `docs/korea-income-welfare-presentation.html`: printable executive brief with charts
+- `docs/korea-income-welfare-presentation.pdf`: recruiter-friendly PDF version of the brief
 - `scripts/income_welfare_analysis.py`: reproducible ML plus econometric pipeline
 - `outputs/tables/model_comparison.csv`: predictive benchmark table
-- `outputs/tables/feature_importance.csv`: random-forest feature importances
+- `outputs/tables/ml_best_params.csv`: tuned hyperparameters for the best model
+- `outputs/tables/feature_importance.csv`: grouped feature importances for the tuned random forest
 - `outputs/tables/econometric_ols_summary.csv`: key semilog OLS coefficients
 - `outputs/tables/quantile_regression_summary.csv`: quantile-regression results for the education premium
-- `outputs/figures/top_feature_importance.png`: random-forest explanation graphic
+- `outputs/figures/model_performance_r2.png`: R-squared comparison across predictive models
+- `outputs/figures/top_feature_importance.png`: main drivers in the tuned random forest
 - `outputs/figures/education_premium_by_quantile.png`: education-premium comparison across mean and quantile models
-- `docs/korea-income-welfare-presentation.html`: print-ready executive brief
-- `docs/korea-income-welfare-presentation.pdf`: portfolio-ready presentation asset
 
 ## Run Locally
 
@@ -92,7 +92,7 @@ jupyter notebook "income_welfare_modeling.ipynb"
 
 This project now demonstrates two complementary strengths:
 
-- the ability to build and compare predictive models honestly;
+- the ability to build and tune predictive models honestly;
 - the ability to step back and ask a more econometric question about heterogeneous returns.
 
 That mix makes the repository stronger for analytics, applied economics, consulting, and data strategy conversations than a pure ML benchmark alone.
