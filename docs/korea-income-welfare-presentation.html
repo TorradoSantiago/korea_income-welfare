@@ -15,14 +15,7 @@
       --panel: #f8fbff;
     }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: "Segoe UI", Arial, sans-serif;
-      font-size: 15px;
-      color: var(--ink);
-      background: white;
-      line-height: 1.5;
-    }
+    body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; font-size: 15px; color: var(--ink); background: white; line-height: 1.5; }
     main { max-width: 960px; margin: 0 auto; }
     h1, h2, h3 { margin: 0 0 12px; line-height: 1.15; break-after: avoid-page; }
     h1 { font-size: 33px; }
@@ -30,72 +23,20 @@
     p { margin: 0 0 14px; color: var(--muted); }
     ul { margin: 0 0 16px 20px; color: var(--muted); }
     li { margin-bottom: 8px; }
-    .hero {
-      padding: 28px 32px;
-      border: 1px solid var(--line);
-      border-radius: 24px;
-      background: linear-gradient(135deg, #f9fbff 0%, #eef5ff 100%);
-    }
-    .eyebrow {
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.16em;
-      color: var(--accent);
-      font-weight: 700;
-      margin-bottom: 10px;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 14px;
-      margin-top: 22px;
-    }
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      padding: 18px;
-      break-inside: avoid-page;
-    }
+    .hero { padding: 28px 32px; border: 1px solid var(--line); border-radius: 24px; background: linear-gradient(135deg, #f9fbff 0%, #eef5ff 100%); }
+    .eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: 0.16em; color: var(--accent); font-weight: 700; margin-bottom: 10px; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 22px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 18px; break-inside: avoid-page; }
     .metric { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
     .label { font-size: 13px; color: var(--muted); }
     .section { margin-top: 26px; padding-top: 24px; border-top: 1px solid var(--line); }
     .page-start { break-before: page; page-break-before: always; }
-    .callout {
-      border-left: 4px solid var(--accent);
-      background: var(--accent-soft);
-      padding: 16px 18px;
-      border-radius: 14px;
-      margin: 18px 0;
-      color: var(--ink);
-    }
-    .figure {
-      margin: 22px 0;
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      overflow: hidden;
-      background: white;
-      break-inside: avoid-page;
-    }
+    .callout { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 16px 18px; border-radius: 14px; margin: 18px 0; color: var(--ink); }
+    .figure { margin: 22px 0; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: white; break-inside: avoid-page; }
     .figure img { width: 100%; display: block; object-fit: contain; max-height: 205mm; }
-    .figure figcaption {
-      padding: 12px 16px;
-      font-size: 13px;
-      color: var(--muted);
-      border-top: 1px solid var(--line);
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 14px;
-      font-size: 13px;
-    }
-    th, td {
-      border: 1px solid var(--line);
-      padding: 10px 12px;
-      text-align: left;
-      vertical-align: top;
-    }
+    .figure figcaption { padding: 12px 16px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
     th { background: var(--accent-soft); }
   </style>
 </head>
@@ -104,7 +45,7 @@
     <section class="hero">
       <div class="eyebrow">Applied Machine Learning and Econometrics Case</div>
       <h1>Korea Income & Welfare</h1>
-      <p>This project studies how education relates to income in Korean welfare microdata. It now works as a stronger portfolio case because the modeling is broader, the best predictive model is tuned, and the final conclusion is easier to explain to a non-technical audience.</p>
+      <p>This project studies how education relates to income in Korean welfare microdata. The updated version keeps the best part of the original delivery: a clear explanation of why this question matters for individuals, educational institutions, organizations, and policymakers.</p>
       <div class="grid">
         <article class="card">
           <div class="metric">89,935</div>
@@ -122,34 +63,34 @@
     </section>
 
     <section class="section">
-      <h2>What question does it answer?</h2>
-      <p>The case asks three practical questions. First, how much can education explain about income? Second, how much predictive power appears once age, household structure, region, and demographics are included? Third, does education pay off equally across the income distribution?</p>
+      <h2>Why this question matters</h2>
+      <p>The original notebook framed education and income as a real decision problem. People want to know whether investing in education pays off. Educational institutions want to understand whether credentials are aligned with labor-market value. Policymakers need evidence on how education relates to earnings and mobility. That framing is preserved here because it turns the project into a useful applied case instead of a generic ML exercise.</p>
       <div class="callout">
-        Executive takeaway: education clearly matters, but household structure and life-cycle effects matter too, and the payoff to education becomes stronger in the upper part of the income distribution.
+        Executive takeaway: the project is not just about predicting income. It is about understanding whether education has measurable economic value, how strong that value is, and whether it changes across the income distribution.
       </div>
       <ul>
-        <li>The tuned random forest improves the original predictive benchmark from 0.294 to 0.645 in R-squared.</li>
-        <li>The best model uses 400 trees, max depth 16, and minimum leaf size 3.</li>
-        <li>Quantile regression shows the education premium rising from 11.46% to 14.17% as income increases.</li>
+        <li>Does education have a significant effect on income?</li>
+        <li>How much does prediction improve once age, family structure, region, and demographics are added?</li>
+        <li>Is the payoff to education the same for lower-income and higher-income groups?</li>
       </ul>
     </section>
 
     <section class="section page-start">
-      <h2>What the descriptive layer shows</h2>
-      <p>Before any model is trained, the data already show a clear socioeconomic pattern: income rises with education, and Seoul leads the regional distribution.</p>
+      <h2>What the data show before modeling</h2>
+      <p>The descriptive layer already supports the core intuition: income rises across education levels and varies meaningfully by region. This matters because the strongest analytical projects do not start with the model; they start with a coherent story in the data.</p>
       <figure class="figure">
         <img src="../outputs/figures/income_by_education.png" alt="Average income by education level">
-        <figcaption>Income increases steadily across the education ladder, which makes the central hypothesis intuitive even for a non-technical reader.</figcaption>
+        <figcaption>Income increases steadily across the education ladder, which makes the core education-income relationship easy to explain to a non-technical audience.</figcaption>
       </figure>
       <figure class="figure">
         <img src="../outputs/figures/median_income_by_region.png" alt="Median income by region">
-        <figcaption>Regional context matters. Education is important, but it is not the only part of the income story.</figcaption>
+        <figcaption>Regional context matters too. Education is important, but it is not the only part of the income story.</figcaption>
       </figure>
     </section>
 
     <section class="section page-start">
       <h2>What the modeling layer adds</h2>
-      <p>The repository now compares five out-of-sample predictive models, then complements that with coefficient-based econometrics. This combination is valuable because it shows both performance and interpretation.</p>
+      <p>The repository now compares five out-of-sample predictive models, then complements that with coefficient-based econometrics. This makes the project stronger because it shows both performance and interpretation.</p>
       <table>
         <thead>
           <tr>
@@ -173,12 +114,6 @@
             <td>0.603</td>
           </tr>
           <tr>
-            <td>Elastic Net</td>
-            <td>1,049.76</td>
-            <td>1,414.42</td>
-            <td>0.545</td>
-          </tr>
-          <tr>
             <td>Multivariable Linear Regression</td>
             <td>1,049.83</td>
             <td>1,414.49</td>
@@ -194,23 +129,23 @@
       </table>
       <figure class="figure">
         <img src="../outputs/figures/model_performance_r2.png" alt="Model performance comparison">
-        <figcaption>The predictive story is much stronger after adding multivariable structure and tuning. The tuned random forest becomes the clear winner.</figcaption>
+        <figcaption>The tuned random forest is the best predictive model. The key point is not only that it wins, but that it quantifies how much value is added by moving from a one-variable benchmark to a richer socioeconomic specification.</figcaption>
       </figure>
       <figure class="figure">
         <img src="../outputs/figures/top_feature_importance.png" alt="Feature importance chart">
-        <figcaption>Household size is the most important feature group in the best model, followed by age, education, and survey year.</figcaption>
+        <figcaption>Household size, age, education, and survey year are the strongest feature groups in the best model. The result broadens the story without weakening the role of education.</figcaption>
       </figure>
     </section>
 
     <section class="section page-start">
-      <h2>What the econometrics say</h2>
-      <p>The econometric layer gives the project a more interview-friendly conclusion. Instead of only saying that education predicts income, it shows that the education premium grows across the distribution.</p>
+      <h2>What the econometrics add</h2>
+      <p>The econometric layer gives the project a more interview-friendly conclusion. Instead of only saying that education predicts income, it shows that the education premium itself changes across the income distribution.</p>
       <figure class="figure">
         <img src="../outputs/figures/education_premium_by_quantile.png" alt="Education premium across quantiles">
-        <figcaption>The estimated premium is 12.47% on average, 11.46% near the lower end of the distribution, and 14.17% in the upper part. That makes the story richer than a single mean effect.</figcaption>
+        <figcaption>The estimated education premium is 12.47% on average, 11.46% near the lower end of the distribution, and 14.17% in the upper part. That makes the story richer than a single mean effect.</figcaption>
       </figure>
       <div class="callout">
-        Hiring takeaway: this project is strong because it combines tuning, benchmarking, and interpretation. It shows that model performance improved, but it also explains what changed in economic terms.
+        Hiring takeaway: this project is strong because it combines hypothesis framing, tuning, benchmarking, and interpretation. It shows not only that performance improved, but also what changed in economic terms.
       </div>
     </section>
   </main>

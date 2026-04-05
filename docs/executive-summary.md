@@ -1,44 +1,49 @@
-﻿# Korea Income & Welfare
+﻿# Executive Summary
 
-## Executive summary
+## Metadata and original objective
 
-This repository studies how education relates to income using Korean welfare microdata and now includes both a tuned predictive benchmarking layer and a proper econometric extension. The updated workflow processes `89,935` valid records, trims the modeling sample to `86,313` observations, exports reusable figures, and compares model performance against semilog and quantile-regression estimates.
+The original notebook began with a strong analytical setup: it described the full welfare dataset, clarified the meaning of the variables, and framed the core objective as understanding how education affects income in Korea. That structure is preserved here because it gives the repository a clearer purpose than a generic modeling exercise.
 
-## Analytical question
+The original objective was simple and strong: determine how education affects a person's income and use that relationship to generate useful insight for individuals, institutions, firms, and policymakers.
 
-How much of individual income can education explain, how much predictive power appears once age, household structure, time, and social attributes are included, and are the returns to education constant across the income distribution?
+## Research question and hypotheses
 
-## Updated hypotheses
+- `H0`: education does not have a meaningful effect on income in this sample.
+- `H1`: education has a meaningful positive effect on income, and different education levels are associated with different income ranges.
+- `H2`: a broader socioeconomic model should materially outperform an education-only baseline.
+- `H3`: the return to education should vary across the income distribution rather than remaining constant.
 
-- `H1`: education has a meaningful positive relationship with income.
-- `H2`: education is informative but incomplete, so a broader multivariable model should materially outperform an education-only benchmark.
-- `H3`: the return to education is heterogeneous and should be larger in the upper part of the income distribution.
-- `H4`: a tuned tree-based model should outperform untuned baselines without changing the substantive conclusion.
+## Commercial and policy context
 
-## What the upgraded analysis shows
+The original delivery did something important that is often missing from portfolio work: it explained why the question matters. Individuals want to know whether investing in education pays off. Educational institutions need to understand whether their programs are aligned with labor-market outcomes. Policymakers want evidence on how educational attainment relates to earnings and social mobility. That context remains central to the repository because it makes the analysis more than a technical benchmark.
+
+## Analytical approach
+
+The upgraded repository now combines three layers:
+
+1. A descriptive layer that profiles `89,935` valid observations and shows how income varies by education, region, and time.
+2. A tuned ML benchmark that compares five out-of-sample models and finds a best-performing random forest with `R^2 = 0.645`.
+3. An econometric layer that estimates a semilog OLS model and quantile regressions to test whether education premiums are heterogeneous across the income distribution.
+
+## What the evidence shows
 
 - Income rises steadily across the education ladder, from roughly `999 USD` on average for people with no formal education to `5,480 USD` for doctorate holders in the trimmed sample.
 - Seoul leads the regional distribution with a median income of roughly `2,884 USD`.
-- The education-only linear regression reaches `R^2 = 0.294`, which confirms signal but leaves most variance unexplained.
+- The education-only linear regression reaches `R^2 = 0.294`.
 - The multivariable linear model improves to `R^2 = 0.545`.
 - Gradient boosting reaches `R^2 = 0.603`.
-- The tuned random forest reaches `R^2 = 0.645`, making it the strongest predictive benchmark in the repository.
+- The tuned random forest reaches `R^2 = 0.645` and becomes the strongest predictive benchmark.
 - The semilog OLS model estimates a `12.47%` income premium for each additional education step.
 - The quantile regressions show that the education premium rises across the distribution: `11.46%` at the 25th percentile, `13.84%` at the median, and `14.17%` at the 75th percentile.
 
-## Most important modeling lesson
+## Interpretation
 
-The ML layer and the econometric layer now complement each other. The tuned random forest shows that household size, age, education, and year all carry major predictive signal. The quantile-regression layer sharpens that conclusion by showing that education does not pay off equally everywhere in the distribution. Its association with income is stronger in the better-paid segments of the sample.
+The ML layer and the econometric layer tell a coherent story. The tuned random forest shows that household size, age, education, and year all matter for prediction. The econometric layer then explains what that means: education is a meaningful socioeconomic signal, but its payoff is not constant. It grows in the upper part of the income distribution.
 
-## Improved conclusion
+## Main conclusion
 
-Education matters and should stay at the center of the story, but the stronger portfolio-quality conclusion is more nuanced: education is a meaningful socioeconomic signal, its payoff is heterogeneous, and a serious analysis benefits from both tuned predictive models and interpretable coefficient-based evidence. That makes the repository more credible for analytics, policy, and consulting positioning than a pure one-model notebook.
+The project is strongest when it is read as both a predictive and an interpretive case. The tuned model proves that a richer socioeconomic specification materially improves prediction, while the quantile regressions show that education has heterogeneous returns. That combination is much closer to a real applied-economics or analytics-consulting case than a single benchmark notebook.
 
-## Portfolio takeaway
+## Original delivery preservation
 
-This repository now demonstrates:
-
-- a reproducible analysis pipeline in English;
-- reusable charts, benchmark tables, and tuned hyperparameters;
-- a bridge between machine learning and econometrics;
-- a more senior interpretation of what the models can and cannot explain.
+The original Spanish notebook and its theoretical narrative are explicitly preserved in `archive/original_delivery/`. That archive matters because it keeps the first academic framing visible and usable, instead of replacing it with a thinner portfolio summary.
