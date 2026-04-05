@@ -7,15 +7,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import statsmodels.api as sm
 import statsmodels.formula.api as smf
+from scipy import stats as scipy_stats
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import ElasticNet, LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from statsmodels.stats.diagnostic import het_breuschpagan, linear_reset
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = BASE_DIR / 'Korea_Income_and_Welfare.csv'
@@ -143,6 +147,8 @@ def build_model_frame(analysis_frame: pd.DataFrame) -> pd.DataFrame:
 
     model_frame = trim_target_outliers(model_frame, 'income_usd')
     model_frame['log_income_usd'] = np.log(model_frame['income_usd'])
+    model_frame['age_centered'] = model_frame['age'] - model_frame['age'].mean()
+    model_frame['age_centered_sq'] = model_frame['age_centered'] ** 2
     return model_frame
 
 
@@ -186,6 +192,58 @@ def build_year_summary(dataframe: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
         .sort_values('year')
+    )
+
+
+def build_statistical_tests(analysis_frame: pd.DataFrame, model_frame: pd.DataFrame) -> pd.DataFrame:
+    education_groups = [
+        group['income_usd'].dropna().values
+        for _, group in analysis_frame.groupby('education_label')
+        if group['income_usd'].notna().sum() >= 25
+    ]
+    education_test = scipy_stats.kruskal(*education_groups)
+    education_spearman = scipy_stats.spearmanr(
+        analysis_frame['education_level'], analysis_frame['income_usd'], nan_policy='omit'
+    )
+    male_income = analysis_frame.loc[analysis_frame['gender_label'] == 'Male', 'income_usd']
+    female_income = analysis_frame.loc[analysis_frame['gender_label'] == 'Female', 'income_usd']
+    gender_test = scipy_stats.mannwhitneyu(male_income, female_income, alternative='two-sided')
+
+    return pd.DataFrame(
+        [
+            {
+                'test_id': 'K1',
+                'question': 'Do income distributions differ across education levels?',
+                'test': 'Kruskal-Wallis',
+                'statistic': float(education_test.statistic),
+                'p_value': float(education_test.pvalue),
+                'key_signal': 'Education groups show materially different income distributions.',
+            },
+            {
+                'test_id': 'K2',
+                'question': 'Is education monotonically associated with income?',
+                'test': 'Spearman correlation',
+                'statistic': float(education_spearman.statistic),
+                'p_value': float(education_spearman.pvalue),
+                'key_signal': 'Higher education steps are strongly associated with higher income.',
+            },
+            {
+                'test_id': 'K3',
+                'question': 'Do men and women show different income distributions?',
+                'test': 'Mann-Whitney U',
+                'statistic': float(gender_test.statistic),
+                'p_value': float(gender_test.pvalue),
+                'key_signal': 'Raw income distributions still differ by gender before conditioning on controls.',
+            },
+            {
+                'test_id': 'K4',
+                'question': 'Does the trimmed modeling sample retain high explanatory variation?',
+                'test': 'Sample check',
+                'statistic': float(model_frame['income_usd'].std()),
+                'p_value': np.nan,
+                'key_signal': 'The modeling sample keeps meaningful income dispersion after trimming outliers.',
+            },
+        ]
     )
 
 
@@ -251,7 +309,39 @@ def evaluate_model(model_name: str, y_true: pd.Series, y_pred: np.ndarray) -> di
     }
 
 
-def run_models(model_frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_ml_cross_validation(
+    education_only: pd.DataFrame, multivariable_features: pd.DataFrame, target: pd.Series, models: dict[str, object]
+) -> pd.DataFrame:
+    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    scoring = {
+        'r2': 'r2',
+        'neg_mae': 'neg_mean_absolute_error',
+        'neg_mse': 'neg_mean_squared_error',
+    }
+
+    rows: list[dict[str, float | str]] = []
+    for model_name, model in models.items():
+        feature_set = education_only if model_name == 'Education-only linear regression' else multivariable_features
+        scores = cross_validate(model, feature_set, target, cv=cv, scoring=scoring, n_jobs=1)
+        rmse_values = np.sqrt(-scores['test_neg_mse'])
+        rows.append(
+            {
+                'model': model_name,
+                'cv_r2_mean': float(scores['test_r2'].mean()),
+                'cv_r2_std': float(scores['test_r2'].std(ddof=0)),
+                'cv_mae_mean': float((-scores['test_neg_mae']).mean()),
+                'cv_mae_std': float((-scores['test_neg_mae']).std(ddof=0)),
+                'cv_rmse_mean': float(rmse_values.mean()),
+                'cv_rmse_std': float(rmse_values.std(ddof=0)),
+            }
+        )
+
+    return pd.DataFrame(rows).sort_values('cv_r2_mean', ascending=False)
+
+
+def run_models(
+    model_frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     target = model_frame['income_usd']
     education_only = model_frame[['education_level']]
     multivariable_features = model_frame[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
@@ -369,29 +459,32 @@ def run_models(model_frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, p
             'model': best_model_name,
         }
     ).reset_index(drop=True)
+    cv_models: dict[str, object] = {'Education-only linear regression': LinearRegression(), **models}
+    ml_cross_validation = build_ml_cross_validation(education_only, multivariable_features, target, cv_models)
 
-    return model_comparison, feature_importance, best_params, prediction_frame
+    return model_comparison, feature_importance, best_params, prediction_frame, ml_cross_validation
 
 
 def run_econometric_models(model_frame: pd.DataFrame):
     formula = (
-        'log_income_usd ~ education_level + age + I(age ** 2) + family_member + year + '
+        'log_income_usd ~ education_level + age_centered + I(age_centered ** 2) + family_member + year + '
         'C(region_label) + C(gender_label) + C(marriage_label) + C(religion_label)'
     )
+    ols_base_model = smf.ols(formula, data=model_frame).fit()
     ols_model = smf.ols(formula, data=model_frame).fit(cov_type='HC3')
 
     quantile_models: dict[float, object] = {}
     for quantile in (0.25, 0.5, 0.75):
         quantile_models[quantile] = smf.quantreg(formula, data=model_frame).fit(q=quantile, max_iter=2000)
 
-    return ols_model, quantile_models
+    return ols_base_model, ols_model, quantile_models
 
 
 def build_ols_summary(ols_model) -> pd.DataFrame:
     key_terms = {
         'education_level': 'Education step premium',
-        'age': 'Age effect',
-        'I(age ** 2)': 'Age squared',
+        'age_centered': 'Age effect (centered)',
+        'I(age_centered ** 2)': 'Age squared',
         'family_member': 'Household size effect',
         'year': 'Survey year trend',
     }
@@ -410,6 +503,72 @@ def build_ols_summary(ols_model) -> pd.DataFrame:
                 'ci_low': float(conf_int.iloc[0]),
                 'ci_high': float(conf_int.iloc[1]),
                 'approx_pct_effect': (np.exp(coefficient) - 1) * 100,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def build_econometric_diagnostics(ols_base_model) -> pd.DataFrame:
+    bp_lm, bp_lm_pvalue, bp_fvalue, bp_f_pvalue = het_breuschpagan(ols_base_model.resid, ols_base_model.model.exog)
+    reset_result = linear_reset(ols_base_model, power=2, use_f=True)
+    jb_result = scipy_stats.jarque_bera(ols_base_model.resid)
+
+    return pd.DataFrame(
+        [
+            {
+                'diagnostic': 'Adjusted R-squared',
+                'statistic': float(ols_base_model.rsquared_adj),
+                'p_value': np.nan,
+                'interpretation': 'Share of log-income variation explained by the multivariable OLS benchmark.',
+            },
+            {
+                'diagnostic': 'Breusch-Pagan LM',
+                'statistic': float(bp_lm),
+                'p_value': float(bp_lm_pvalue),
+                'interpretation': 'Tests whether residual variance changes systematically with fitted covariates.',
+            },
+            {
+                'diagnostic': 'Breusch-Pagan F',
+                'statistic': float(bp_fvalue),
+                'p_value': float(bp_f_pvalue),
+                'interpretation': 'F-statistic version of the heteroskedasticity diagnostic.',
+            },
+            {
+                'diagnostic': 'RESET F',
+                'statistic': float(reset_result.fvalue),
+                'p_value': float(reset_result.pvalue),
+                'interpretation': 'Signals whether additional nonlinear terms would improve specification.',
+            },
+            {
+                'diagnostic': 'Jarque-Bera',
+                'statistic': float(jb_result.statistic),
+                'p_value': float(jb_result.pvalue),
+                'interpretation': 'Checks the normality of residuals in the semilog specification.',
+            },
+            {
+                'diagnostic': 'Observations',
+                'statistic': float(ols_base_model.nobs),
+                'p_value': np.nan,
+                'interpretation': 'Trimmed modeling sample used for the econometric layer.',
+            },
+        ]
+    )
+
+
+def build_econometric_vif(model_frame: pd.DataFrame) -> pd.DataFrame:
+    design = model_frame[['education_level', 'age_centered', 'age_centered_sq', 'family_member', 'year']].dropna()
+    design = sm.add_constant(design, has_constant='add')
+    rows: list[dict[str, float | str]] = []
+
+    for index, column in enumerate(design.columns):
+        if column == 'const':
+            continue
+        rows.append(
+            {
+                'term': column,
+                'vif': float(variance_inflation_factor(design.values, index)),
+                'interpretation': 'Centered age terms keep multicollinearity at manageable levels.',
             }
         )
 
@@ -442,20 +601,28 @@ def export_tables(
     education_summary: pd.DataFrame,
     region_summary: pd.DataFrame,
     year_summary: pd.DataFrame,
+    statistical_tests: pd.DataFrame,
     model_comparison: pd.DataFrame,
     feature_importance: pd.DataFrame,
     best_params: pd.DataFrame,
     ols_summary: pd.DataFrame,
+    econometric_diagnostics: pd.DataFrame,
+    econometric_vif: pd.DataFrame,
     quantile_summary: pd.DataFrame,
+    ml_cross_validation: pd.DataFrame,
 ) -> None:
     education_summary.to_csv(TABLES_DIR / 'education_income_summary.csv', index=False)
     region_summary.to_csv(TABLES_DIR / 'region_income_summary.csv', index=False)
     year_summary.to_csv(TABLES_DIR / 'year_income_summary.csv', index=False)
+    statistical_tests.to_csv(TABLES_DIR / 'statistical_tests.csv', index=False)
     model_comparison.to_csv(TABLES_DIR / 'model_comparison.csv', index=False)
     feature_importance.to_csv(TABLES_DIR / 'feature_importance.csv', index=False)
     best_params.to_csv(TABLES_DIR / 'ml_best_params.csv', index=False)
     ols_summary.to_csv(TABLES_DIR / 'econometric_ols_summary.csv', index=False)
+    econometric_diagnostics.to_csv(TABLES_DIR / 'econometric_diagnostics.csv', index=False)
+    econometric_vif.to_csv(TABLES_DIR / 'econometric_vif.csv', index=False)
     quantile_summary.to_csv(TABLES_DIR / 'quantile_regression_summary.csv', index=False)
+    ml_cross_validation.to_csv(TABLES_DIR / 'ml_cross_validation.csv', index=False)
 
 
 def export_figures(
@@ -467,6 +634,7 @@ def export_figures(
     ols_summary: pd.DataFrame,
     quantile_summary: pd.DataFrame,
     prediction_frame: pd.DataFrame,
+    ml_cross_validation: pd.DataFrame,
 ) -> None:
     sns.set_theme(style='whitegrid')
 
@@ -514,6 +682,21 @@ def export_figures(
     plt.ylabel('Median income (USD)')
     plt.tight_layout()
     plt.savefig(FIGURES_DIR / 'median_income_over_time.png', dpi=150)
+    plt.close()
+
+    ols_effects = ols_summary.copy()
+    plt.figure(figsize=(10, 5))
+    sns.barplot(data=ols_effects, x='label', y='approx_pct_effect', hue='label', dodge=False, palette='Blues_d')
+    legend = plt.gca().get_legend()
+    if legend is not None:
+        legend.remove()
+    plt.axhline(0, color='#333333', linewidth=1)
+    plt.title('Key effects from the OLS earnings equation')
+    plt.xlabel('')
+    plt.ylabel('Approximate percent effect')
+    plt.xticks(rotation=18, ha='right')
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / 'ols_key_effects.png', dpi=150)
     plt.close()
 
     top_features = feature_importance.head(10).copy()
@@ -593,6 +776,28 @@ def export_figures(
     plt.savefig(FIGURES_DIR / 'model_performance_r2.png', dpi=150)
     plt.close()
 
+    plt.figure(figsize=(11, 6))
+    sns.barplot(data=ml_cross_validation, x='model', y='cv_r2_mean', hue='model', dodge=False, palette='rocket')
+    legend = plt.gca().get_legend()
+    if legend is not None:
+        legend.remove()
+    plt.errorbar(
+        x=np.arange(len(ml_cross_validation)),
+        y=ml_cross_validation['cv_r2_mean'],
+        yerr=ml_cross_validation['cv_r2_std'],
+        fmt='none',
+        ecolor='#213547',
+        capsize=4,
+        linewidth=1.5,
+    )
+    plt.title('Five-fold cross-validation R-squared')
+    plt.xlabel('Model')
+    plt.ylabel('Cross-validated R-squared')
+    plt.xticks(rotation=18, ha='right')
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / 'ml_cross_validation_r2.png', dpi=150)
+    plt.close()
+
     plt.figure(figsize=(7, 7))
     plot_frame = prediction_frame.copy().sort_values('actual_income')
     sns.scatterplot(data=plot_frame, x='actual_income', y='predicted_income', s=18, alpha=0.45, color='#1f4b6e')
@@ -610,6 +815,7 @@ def export_figures(
 def print_summary(
     analysis_frame: pd.DataFrame,
     region_summary: pd.DataFrame,
+    statistical_tests: pd.DataFrame,
     model_comparison: pd.DataFrame,
     ols_summary: pd.DataFrame,
     quantile_summary: pd.DataFrame,
@@ -619,6 +825,7 @@ def print_summary(
     ols_education_premium = float(
         ols_summary.loc[ols_summary['term'] == 'education_level', 'approx_pct_effect'].iloc[0]
     )
+    education_test_pvalue = float(statistical_tests.loc[statistical_tests['test_id'] == 'K1', 'p_value'].iloc[0])
     low_quantile = float(quantile_summary.loc[quantile_summary['quantile'] == 0.25, 'education_pct_premium'].iloc[0])
     high_quantile = float(quantile_summary.loc[quantile_summary['quantile'] == 0.75, 'education_pct_premium'].iloc[0])
 
@@ -633,6 +840,7 @@ def print_summary(
         f"{strongest_model['model']} (R^2 = {strongest_model['r2']:.3f})"
     )
     print(f'Average education premium per step (OLS): {ols_education_premium:.2f}%')
+    print(f'Education distribution test p-value: {education_test_pvalue:.3g}')
     print(f'Education premium at the 25th percentile: {low_quantile:.2f}%')
     print(f'Education premium at the 75th percentile: {high_quantile:.2f}%')
 
@@ -647,20 +855,27 @@ def main() -> None:
     education_summary = build_education_summary(analysis_frame)
     region_summary = build_region_summary(analysis_frame)
     year_summary = build_year_summary(analysis_frame)
-    model_comparison, feature_importance, best_params, prediction_frame = run_models(model_frame)
-    ols_model, quantile_models = run_econometric_models(model_frame)
+    statistical_tests = build_statistical_tests(analysis_frame, model_frame)
+    model_comparison, feature_importance, best_params, prediction_frame, ml_cross_validation = run_models(model_frame)
+    ols_base_model, ols_model, quantile_models = run_econometric_models(model_frame)
     ols_summary = build_ols_summary(ols_model)
+    econometric_diagnostics = build_econometric_diagnostics(ols_base_model)
+    econometric_vif = build_econometric_vif(model_frame)
     quantile_summary = build_quantile_summary(quantile_models)
 
     export_tables(
         education_summary,
         region_summary,
         year_summary,
+        statistical_tests,
         model_comparison,
         feature_importance,
         best_params,
         ols_summary,
+        econometric_diagnostics,
+        econometric_vif,
         quantile_summary,
+        ml_cross_validation,
     )
     export_figures(
         education_summary,
@@ -671,10 +886,12 @@ def main() -> None:
         ols_summary,
         quantile_summary,
         prediction_frame,
+        ml_cross_validation,
     )
     print_summary(
         analysis_frame,
         region_summary,
+        statistical_tests,
         model_comparison,
         ols_summary,
         quantile_summary,

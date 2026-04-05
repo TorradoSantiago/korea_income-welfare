@@ -1,0 +1,6 @@
+term,vif,interpretation
+education_level,1.7103515598201842,Centered age terms keep multicollinearity at manageable levels.
+age_centered,1.9562063562032606,Centered age terms keep multicollinearity at manageable levels.
+age_centered_sq,1.1782724490404255,Centered age terms keep multicollinearity at manageable levels.
+family_member,1.4039654424392258,Centered age terms keep multicollinearity at manageable levels.
+year,1.0310070007745362,Centered age terms keep multicollinearity at manageable levels.

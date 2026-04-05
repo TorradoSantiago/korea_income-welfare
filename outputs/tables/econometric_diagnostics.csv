@@ -1,0 +1,7 @@
+diagnostic,statistic,p_value,interpretation
+Adjusted R-squared,0.600247082469823,,Share of log-income variation explained by the multivariable OLS benchmark.
+Breusch-Pagan LM,1010.1583983439286,2.6616799904690468e-201,Tests whether residual variance changes systematically with fitted covariates.
+Breusch-Pagan F,51.093601850305696,1.5295199613900831e-202,F-statistic version of the heteroskedasticity diagnostic.
+RESET F,1514.5992184462975,0.0,Signals whether additional nonlinear terms would improve specification.
+Jarque-Bera,221787.3542283705,0.0,Checks the normality of residuals in the semilog specification.
+Observations,86313.0,,Trimmed modeling sample used for the econometric layer.

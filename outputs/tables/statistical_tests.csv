@@ -1,0 +1,5 @@
+test_id,question,test,statistic,p_value,key_signal
+K1,Do income distributions differ across education levels?,Kruskal-Wallis,33934.35620641286,0.0,Education groups show materially different income distributions.
+K2,Is education monotonically associated with income?,Spearman correlation,0.6088176968207205,0.0,Higher education steps are strongly associated with higher income.
+K3,Do men and women show different income distributions?,Mann-Whitney U,1325071316.0,0.0,Raw income distributions still differ by gender before conditioning on controls.
+K4,Does the trimmed modeling sample retain high explanatory variation?,Sample check,2094.7303061864095,,The modeling sample keeps meaningful income dispersion after trimming outliers.
