@@ -3,6 +3,7 @@
 Portfolio-grade case study on Korean welfare microdata that combines predictive benchmarking with an econometric earnings analysis. The repository still answers the original question about education and income, but now preserves the original theoretical framing alongside a much more technical public-facing layer.
 
 Start with:
+- `income_welfare_modeling.ipynb`
 - `BRIEF.md`
 - `docs/executive-summary.md`
 - `docs/korea-income-welfare-presentation.pdf`
