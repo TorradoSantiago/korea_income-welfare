@@ -1,10 +1,25 @@
+# Python
 .ipynb_checkpoints/
-*.aux
-*.fdb_latexmk
-*.fls
-*.log
-*.nav
-*.out
-*.snm
-*.toc
-*.vrb
+__pycache__/
+*.pyc
+*.pyo
+
+# LaTeX build artifacts
+docs/*.aux
+docs/*.fdb_latexmk
+docs/*.fls
+docs/*.log
+docs/*.nav
+docs/*.out
+docs/*.snm
+docs/*.toc
+docs/*.vrb
+
+# Legacy files kept out of the published repo structure
+BRIEF.md
+archive/
+scripts/
+docs/executive-summary.md
+docs/korea-income-welfare-presentation.html
+docs/korea-income-welfare-presentation.tex
+docs/korea-income-welfare-presentation.pdf

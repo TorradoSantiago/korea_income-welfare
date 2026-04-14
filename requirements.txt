@@ -1,9 +1,8 @@
-pandas
-numpy
 matplotlib
-seaborn
-scipy
-scikit-learn
-bokeh
 notebook
+numpy
+pandas
+scikit-learn
+scipy
+seaborn
 statsmodels

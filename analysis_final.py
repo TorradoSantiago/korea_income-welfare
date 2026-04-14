@@ -21,7 +21,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from statsmodels.stats.diagnostic import het_breuschpagan, linear_reset
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT = BASE_DIR / 'Korea_Income_and_Welfare.csv'
 TABLES_DIR = BASE_DIR / 'outputs' / 'tables'
 FIGURES_DIR = BASE_DIR / 'outputs' / 'figures'

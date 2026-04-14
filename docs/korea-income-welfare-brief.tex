@@ -1,0 +1,163 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage[table]{xcolor}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue
+}
+
+\graphicspath{{../outputs/figures/}}
+
+\title{Korea Income and Welfare}
+\author{Santiago Torrado}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{center}
+\large Education premiums, predictive benchmarking, and distributional heterogeneity in Korean welfare microdata
+\end{center}
+
+\begin{abstract}
+This brief studies whether education still carries measurable income value once household size, age, region, gender, religion, and survey year are added to the analysis. The repository combines descriptive summaries, non-parametric tests, machine-learning benchmarking, semilog OLS with robust inference, and quantile regression. The central result is that education has a clearly positive average premium, but that premium is not constant across the income distribution. Machine learning improves pure prediction materially, while the econometric layer explains what those predictive gains mean.
+\end{abstract}
+
+\section{Question}
+
+The project asks three linked questions:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Does education show a strong and statistically meaningful relationship with income in Korean welfare microdata?
+  \item How much does predictive performance improve once richer demographic and household information is added?
+  \item Is the education premium constant, or does it vary across lower-income and higher-income parts of the distribution?
+\end{enumerate}
+
+The analysis is intentionally descriptive and predictive rather than causal. The goal is to measure signal, compare model behavior honestly, and explain the income premium in a way that is useful for analytics, labor-market research, and public-policy storytelling.
+
+\section{Data and empirical design}
+
+The raw dataset contains 92,857 survey records. After removing invalid income observations, restricting the age range to 18 through 90, and keeping rows with usable education information, the main analysis sample contains 89,935 observations. A standard interquartile-range trim on income yields a final modeling sample of 86,313 observations.
+
+The workflow has five layers:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Descriptive EDA across education, region, and survey year.
+  \item Formal distribution tests using Kruskal-Wallis, Spearman rank correlation, and Mann-Whitney U.
+  \item Predictive benchmarking with education-only linear regression, multivariable linear regression, Elastic Net, Gradient Boosting, and a tuned Random Forest.
+  \item A semilog OLS earnings equation with centered age terms and HC3 robust standard errors.
+  \item Quantile regression at the 25th, 50th, and 75th percentiles to test heterogeneous education returns.
+\end{enumerate}
+
+\section{Headline results}
+
+\begin{table}[h]
+\centering
+\rowcolors{2}{gray!10}{white}
+\begin{tabular}{p{0.52\linewidth}p{0.28\linewidth}}
+\toprule
+Indicator & Value \\
+\midrule
+Raw dataset size & 92,857 \\
+Analysis sample size & 89,935 \\
+Trimmed modeling sample size & 86,313 \\
+Spearman education-income association & 0.609 \\
+Average OLS education premium per step & 12.47\% \\
+Best holdout model & Tuned random forest ($R^2 = 0.645$) \\
+Best cross-validated model & Tuned random forest ($CV\ R^2 = 0.649$) \\
+Top region by median income & Seoul (USD 2,883.64) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The non-parametric tests reject the idea that the education-income relationship is noise. Income distributions differ strongly across education groups, the education rank correlation is large and positive, and raw male and female income distributions remain statistically different before conditioning on controls.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.9\linewidth]{income_by_education.png}
+\caption{Average income rises monotonically with education level, from roughly USD 1,000 among the least educated group to more than USD 8,000 among doctorate holders.}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\rowcolors{2}{gray!10}{white}
+\begin{tabular}{lrr}
+\toprule
+Specification & Education premium & Fit metric \\
+\midrule
+Semilog OLS & 12.47\% & --- \\
+Quantile regression, 25th percentile & 11.46\% & pseudo-$R^2 = 0.418$ \\
+Quantile regression, 50th percentile & 13.84\% & pseudo-$R^2 = 0.428$ \\
+Quantile regression, 75th percentile & 14.17\% & pseudo-$R^2 = 0.385$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This pattern matters because it shows that education is not acting like a uniform scalar reward. The return is positive everywhere, but it becomes larger in better-paid parts of the sample, which is consistent with labor-market sorting rather than a flat premium.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.9\linewidth]{education_premium_by_quantile.png}
+\caption{The education premium is positive across all specifications, but it increases toward the upper part of the income distribution.}
+\end{figure}
+
+\section{Predictive benchmarking}
+
+Pure prediction improves materially once the feature set moves beyond education alone.
+
+\begin{table}[h]
+\centering
+\rowcolors{2}{gray!10}{white}
+\begin{tabular}{lrr}
+\toprule
+Model & Holdout $R^2$ & Cross-validated $R^2$ \\
+\midrule
+Education-only linear regression & 0.294 & 0.294 \\
+Multivariable linear regression & 0.545 & 0.542 \\
+Elastic Net & 0.545 & 0.542 \\
+Gradient Boosting & 0.603 & 0.599 \\
+Tuned random forest & 0.645 & 0.649 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The tuned random forest is the strongest predictor, but the econometric layer remains essential because it converts a higher score into an interpretable claim. The feature-importance ranking shows that household size, age, education, and survey year explain most of the incremental predictive power, while the OLS and quantile models explain how the education premium behaves.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.92\linewidth]{model_performance_r2.png}
+\caption{Adding household and demographic context materially improves predictive performance beyond an education-only regression.}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.92\linewidth]{top_feature_importance.png}
+\caption{The tuned random forest relies most heavily on household size, age, education, and survey year, with gender contributing comparatively little incremental signal.}
+\end{figure}
+
+\section{Diagnostics and interpretation}
+
+The semilog specification is not used blindly. Heteroskedasticity is present, so the main OLS table is reported with robust errors. Centering the age polynomial keeps VIF values in a low range and stabilizes the nonlinear life-cycle profile. RESET rejects the idea that a single simple linear specification is fully sufficient, which is exactly why the repository pairs the OLS layer with machine learning and quantile regression instead of presenting a single coefficient table as the whole story.
+
+Taken together, the repository supports a clear conclusion: education has a strong positive average association with income, but that return is heterogeneous across the distribution. Richer socioeconomic context improves prediction substantially, yet interpretation still depends on the econometric layer.
+
+\section{Repository map}
+
+The analysis is organized around four entry points:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{income\_welfare\_modeling.ipynb} for the narrative walkthrough.
+  \item \texttt{analysis\_final.py} for regenerating figures and tables from the raw CSV.
+  \item \texttt{outputs/figures} and \texttt{outputs/tables} for reusable portfolio assets.
+  \item \texttt{docs/korea-income-welfare-brief.pdf} for the final technical summary.
+\end{itemize}
+
+\end{document}
