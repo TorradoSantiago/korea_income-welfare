@@ -1,6 +1,20 @@
-﻿from __future__ import annotations
+"""
+Korea Income and Welfare — analysis pipeline
+=============================================
+Generates 14 publication-ready figures and 13 CSV tables from the raw
+Korea Welfare Panel Survey data.
+
+Usage
+-----
+    python analysis_final.py [--input-path PATH]
+
+Output directories are created automatically under outputs/figures/ and
+outputs/tables/.
+"""
+from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -13,7 +27,7 @@ from scipy import stats as scipy_stats
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import ElasticNet, LinearRegression
+from sklearn.linear_model import ElasticNet, LinearRegression, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
@@ -21,70 +35,65 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from statsmodels.stats.diagnostic import het_breuschpagan, linear_reset
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
-BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_INPUT = BASE_DIR / 'Korea_Income_and_Welfare.csv'
-TABLES_DIR = BASE_DIR / 'outputs' / 'tables'
-FIGURES_DIR = BASE_DIR / 'outputs' / 'figures'
+warnings.filterwarnings("ignore", category=FutureWarning)
 
+try:
+    from xgboost import XGBRegressor
+    _HAS_XGB = True
+except ImportError:
+    _HAS_XGB = False
+
+BASE_DIR      = Path(__file__).resolve().parent
+DEFAULT_INPUT = BASE_DIR / "Korea_Income_and_Welfare.csv"
+TABLES_DIR    = BASE_DIR / "outputs" / "tables"
+FIGURES_DIR   = BASE_DIR / "outputs" / "figures"
+
+# ── Colour palette (navy / amber / teal / purple / red) ──────────────────────
+NAVY   = "#1a3a5c"
+AMBER  = "#c9772b"
+TEAL   = "#0f7b6c"
+PURPLE = "#6a3d9a"
+RED    = "#b94a48"
+SLATE  = "#4a5568"
+LIGHT  = "#e8edf2"
+
+# ── Lookup tables ─────────────────────────────────────────────────────────────
 REGION_LABELS = {
-    1: 'Seoul',
-    2: 'Gyeonggi',
-    3: 'South Gyeongsang',
-    4: 'North Gyeongsang',
-    5: 'South Chungcheong',
-    6: 'Gangwon and North Chungcheong',
-    7: 'Jeolla and Jeju',
+    1: "Seoul", 2: "Gyeonggi",
+    3: "S. Gyeongsang", 4: "N. Gyeongsang",
+    5: "S. Chungcheong", 6: "Gangwon & N. Chungcheong",
+    7: "Jeolla & Jeju",
 }
-
-EDUCATION_LABELS = {
-    1: 'No formal education (under age 7)',
-    2: 'No formal education (age 7+)',
-    3: 'Elementary school',
-    4: 'Middle school',
-    5: 'High school',
-    6: 'College',
-    7: 'University degree',
-    8: "Master's degree",
-    9: 'Doctorate',
+EDU_SHORT = {
+    1: "No formal\n(u/7)", 2: "No formal\n(7+)", 3: "Elementary",
+    4: "Middle", 5: "High school", 6: "College",
+    7: "University", 8: "Master's", 9: "Doctorate",
 }
-
+EDU_FULL = {
+    1: "No formal education (under 7)", 2: "No formal education (age 7+)",
+    3: "Elementary school",            4: "Middle school",
+    5: "High school",                  6: "College",
+    7: "University degree",            8: "Master's degree",
+    9: "Doctorate",
+}
 MARRIAGE_LABELS = {
-    0: 'Unknown',
-    1: 'Not applicable',
-    2: 'Married',
-    3: 'Separated due to widowhood',
-    4: 'Separated',
-    5: 'Single',
-    6: 'Other',
-    9: 'Unknown',
+    0: "Unknown", 1: "N/A", 2: "Married",
+    3: "Widowed",  4: "Separated", 5: "Single", 6: "Other", 9: "Unknown",
 }
+GENDER_LABELS   = {1: "Male", 2: "Female"}
+RELIGION_LABELS = {1: "Has religion", 2: "No religion", 9: "Unknown"}
 
-GENDER_LABELS = {
-    1: 'Male',
-    2: 'Female',
-}
+NUMERIC_FEATURES     = ["education_level", "age", "family_member", "year"]
+CATEGORICAL_FEATURES = ["region_label", "gender_label", "marriage_label", "religion_label"]
 
-RELIGION_LABELS = {
-    1: 'Has religion',
-    2: 'No religion',
-    9: 'Unknown',
-}
-
-NUMERIC_FEATURES = ['education_level', 'age', 'family_member', 'year']
-CATEGORICAL_FEATURES = ['region_label', 'gender_label', 'marriage_label', 'religion_label']
+BOOTSTRAP_N = 500   # iterations for confidence intervals
 
 
+# ── CLI ───────────────────────────────────────────────────────────────────────
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description='Generate reusable outputs and econometric plus ML benchmarks for the Korea income and welfare project.'
-    )
-    parser.add_argument(
-        '--input-path',
-        type=Path,
-        default=DEFAULT_INPUT,
-        help='Path to the Korea income and welfare CSV file.',
-    )
-    return parser.parse_args()
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--input-path", type=Path, default=DEFAULT_INPUT)
+    return p.parse_args()
 
 
 def ensure_directories() -> None:
@@ -92,811 +101,831 @@ def ensure_directories() -> None:
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_dataset(input_path: Path) -> pd.DataFrame:
-    if not input_path.exists():
-        raise FileNotFoundError(f'Input file was not found: {input_path}')
+# ── Data loading and cleaning ─────────────────────────────────────────────────
+def load_dataset(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(path)
+    df = pd.read_csv(path)
+    df["region_label"]    = df["region"].map(REGION_LABELS)
+    df["education_label"] = df["education_level"].map(EDU_FULL)
+    df["edu_short"]       = df["education_level"].map(EDU_SHORT)
+    df["marriage_label"]  = df["marriage"].map(MARRIAGE_LABELS)
+    df["gender_label"]    = df["gender"].map(GENDER_LABELS)
+    df["religion_label"]  = df["religion"].map(RELIGION_LABELS)
+    df["income_usd"]      = (df["income"] * 1000) / 1100   # KRW 000s → USD
+    df["age"]             = 2018 - df["year_born"]
+    return df
 
-    dataframe = pd.read_csv(input_path)
-    dataframe['region_label'] = dataframe['region'].map(REGION_LABELS)
-    dataframe['education_label'] = dataframe['education_level'].map(EDUCATION_LABELS)
-    dataframe['marriage_label'] = dataframe['marriage'].map(MARRIAGE_LABELS)
-    dataframe['gender_label'] = dataframe['gender'].map(GENDER_LABELS)
-    dataframe['religion_label'] = dataframe['religion'].map(RELIGION_LABELS)
-    dataframe['income_usd'] = (dataframe['income'] * 1000) / 1100
-    dataframe['age'] = 2018 - dataframe['year_born']
-    return dataframe
 
-
-def build_analysis_frame(dataframe: pd.DataFrame) -> pd.DataFrame:
-    analysis_frame = dataframe.loc[
-        dataframe['income_usd'].notna()
-        & (dataframe['income_usd'] > 0)
-        & dataframe['age'].between(18, 90)
-        & dataframe['education_label'].notna()
+def build_analysis_frame(df: pd.DataFrame) -> pd.DataFrame:
+    af = df.loc[
+        df["income_usd"].notna() & (df["income_usd"] > 0)
+        & df["age"].between(18, 90)
+        & df["education_label"].notna()
     ].copy()
-
-    analysis_frame['family_member'] = pd.to_numeric(analysis_frame['family_member'], errors='coerce')
-    analysis_frame['year'] = pd.to_numeric(analysis_frame['year'], errors='coerce')
-    analysis_frame['education_level'] = pd.to_numeric(analysis_frame['education_level'], errors='coerce')
-    return analysis_frame
+    for col in ["family_member", "year", "education_level"]:
+        af[col] = pd.to_numeric(af[col], errors="coerce")
+    return af
 
 
-def trim_target_outliers(dataframe: pd.DataFrame, target_column: str) -> pd.DataFrame:
-    q1 = dataframe[target_column].quantile(0.25)
-    q3 = dataframe[target_column].quantile(0.75)
+def trim_iqr(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    q1, q3 = df[col].quantile(0.25), df[col].quantile(0.75)
     iqr = q3 - q1
-    lower_bound = q1 - 1.5 * iqr
-    upper_bound = q3 + 1.5 * iqr
-    return dataframe.loc[dataframe[target_column].between(lower_bound, upper_bound)].copy()
+    return df.loc[df[col].between(q1 - 1.5 * iqr, q3 + 1.5 * iqr)].copy()
 
 
-def build_model_frame(analysis_frame: pd.DataFrame) -> pd.DataFrame:
-    model_frame = analysis_frame[
-        [
-            'income_usd',
-            'education_level',
-            'age',
-            'family_member',
-            'year',
-            'region_label',
-            'gender_label',
-            'marriage_label',
-            'religion_label',
-        ]
-    ].dropna().copy()
-
-    model_frame = trim_target_outliers(model_frame, 'income_usd')
-    model_frame['log_income_usd'] = np.log(model_frame['income_usd'])
-    model_frame['age_centered'] = model_frame['age'] - model_frame['age'].mean()
-    model_frame['age_centered_sq'] = model_frame['age_centered'] ** 2
-    return model_frame
+def build_model_frame(af: pd.DataFrame) -> pd.DataFrame:
+    mf = af[[
+        "income_usd", "education_level", "age", "family_member", "year",
+        "region_label", "gender_label", "marriage_label", "religion_label",
+    ]].dropna().copy()
+    mf = trim_iqr(mf, "income_usd")
+    mf["log_income_usd"]  = np.log(mf["income_usd"])
+    mf["age_centered"]    = mf["age"] - mf["age"].mean()
+    mf["age_centered_sq"] = mf["age_centered"] ** 2
+    return mf
 
 
-def build_education_summary(dataframe: pd.DataFrame) -> pd.DataFrame:
-    summary = (
-        dataframe.groupby('education_label', dropna=False)
-        .agg(
-            respondents=('id', 'count'),
-            median_income_usd=('income_usd', 'median'),
-            average_income_usd=('income_usd', 'mean'),
-        )
+# ── Summary tables ────────────────────────────────────────────────────────────
+def build_education_summary(af: pd.DataFrame) -> pd.DataFrame:
+    s = (
+        af.groupby("education_label", dropna=False)
+        .agg(n=("id", "count"),
+             median_usd=("income_usd", "median"),
+             mean_usd=("income_usd", "mean"),
+             p25=("income_usd", lambda x: x.quantile(0.25)),
+             p75=("income_usd", lambda x: x.quantile(0.75)))
         .reset_index()
     )
-
-    summary['education_order'] = summary['education_label'].map(
-        {label: code for code, label in EDUCATION_LABELS.items()}
-    )
-    return summary.sort_values('education_order').drop(columns='education_order')
+    s["order"] = s["education_label"].map({v: k for k, v in EDU_FULL.items()})
+    return s.sort_values("order").drop(columns="order")
 
 
-def build_region_summary(dataframe: pd.DataFrame) -> pd.DataFrame:
+def build_region_summary(af: pd.DataFrame) -> pd.DataFrame:
     return (
-        dataframe.groupby('region_label', dropna=False)
-        .agg(
-            respondents=('id', 'count'),
-            median_income_usd=('income_usd', 'median'),
-            average_income_usd=('income_usd', 'mean'),
-        )
-        .reset_index()
-        .sort_values('median_income_usd', ascending=False)
+        af.groupby("region_label", dropna=False)
+        .agg(n=("id", "count"),
+             median_usd=("income_usd", "median"),
+             mean_usd=("income_usd", "mean"))
+        .reset_index().sort_values("median_usd", ascending=False)
     )
 
 
-def build_year_summary(dataframe: pd.DataFrame) -> pd.DataFrame:
+def build_year_summary(af: pd.DataFrame) -> pd.DataFrame:
     return (
-        dataframe.groupby('year', dropna=False)
-        .agg(
-            respondents=('id', 'count'),
-            median_income_usd=('income_usd', 'median'),
-            average_income_usd=('income_usd', 'mean'),
-        )
-        .reset_index()
-        .sort_values('year')
+        af.groupby("year", dropna=False)
+        .agg(n=("id", "count"),
+             median_usd=("income_usd", "median"),
+             mean_usd=("income_usd", "mean"))
+        .reset_index().sort_values("year")
     )
 
 
-def build_statistical_tests(analysis_frame: pd.DataFrame, model_frame: pd.DataFrame) -> pd.DataFrame:
-    education_groups = [
-        group['income_usd'].dropna().values
-        for _, group in analysis_frame.groupby('education_label')
-        if group['income_usd'].notna().sum() >= 25
-    ]
-    education_test = scipy_stats.kruskal(*education_groups)
-    education_spearman = scipy_stats.spearmanr(
-        analysis_frame['education_level'], analysis_frame['income_usd'], nan_policy='omit'
+def build_gender_edu_summary(af: pd.DataFrame) -> pd.DataFrame:
+    s = (
+        af.groupby(["education_level", "gender_label"], dropna=False)
+        .agg(median_usd=("income_usd", "median"), n=("id", "count"))
+        .reset_index().dropna(subset=["gender_label"])
     )
-    male_income = analysis_frame.loc[analysis_frame['gender_label'] == 'Male', 'income_usd']
-    female_income = analysis_frame.loc[analysis_frame['gender_label'] == 'Female', 'income_usd']
-    gender_test = scipy_stats.mannwhitneyu(male_income, female_income, alternative='two-sided')
-
-    return pd.DataFrame(
-        [
-            {
-                'test_id': 'K1',
-                'question': 'Do income distributions differ across education levels?',
-                'test': 'Kruskal-Wallis',
-                'statistic': float(education_test.statistic),
-                'p_value': float(education_test.pvalue),
-                'key_signal': 'Education groups show materially different income distributions.',
-            },
-            {
-                'test_id': 'K2',
-                'question': 'Is education monotonically associated with income?',
-                'test': 'Spearman correlation',
-                'statistic': float(education_spearman.statistic),
-                'p_value': float(education_spearman.pvalue),
-                'key_signal': 'Higher education steps are strongly associated with higher income.',
-            },
-            {
-                'test_id': 'K3',
-                'question': 'Do men and women show different income distributions?',
-                'test': 'Mann-Whitney U',
-                'statistic': float(gender_test.statistic),
-                'p_value': float(gender_test.pvalue),
-                'key_signal': 'Raw income distributions still differ by gender before conditioning on controls.',
-            },
-            {
-                'test_id': 'K4',
-                'question': 'Does the trimmed modeling sample retain high explanatory variation?',
-                'test': 'Sample check',
-                'statistic': float(model_frame['income_usd'].std()),
-                'p_value': np.nan,
-                'key_signal': 'The modeling sample keeps meaningful income dispersion after trimming outliers.',
-            },
-        ]
-    )
+    s["edu_short"] = s["education_level"].map(EDU_SHORT)
+    return s.sort_values("education_level")
 
 
-def get_linear_preprocessor() -> ColumnTransformer:
-    return ColumnTransformer(
-        transformers=[
-            (
-                'numeric',
-                Pipeline(
-                    steps=[
-                        ('imputer', SimpleImputer(strategy='median')),
-                        ('scaler', StandardScaler()),
-                    ]
-                ),
-                NUMERIC_FEATURES,
-            ),
-            (
-                'categorical',
-                Pipeline(
-                    steps=[
-                        ('imputer', SimpleImputer(strategy='most_frequent')),
-                        ('encoder', OneHotEncoder(handle_unknown='ignore')),
-                    ]
-                ),
-                CATEGORICAL_FEATURES,
-            ),
-        ]
-    )
+def build_statistical_tests(af: pd.DataFrame) -> pd.DataFrame:
+    edu_groups    = [g["income_usd"].dropna().values
+                     for _, g in af.groupby("education_label")
+                     if g["income_usd"].notna().sum() >= 25]
+    region_groups = [g["income_usd"].dropna().values
+                     for _, g in af.groupby("region_label")
+                     if g["income_usd"].notna().sum() >= 25]
+    kw_edu  = scipy_stats.kruskal(*edu_groups)
+    kw_reg  = scipy_stats.kruskal(*region_groups)
+    sp      = scipy_stats.spearmanr(af["education_level"], af["income_usd"], nan_policy="omit")
+    male    = af.loc[af["gender_label"] == "Male",   "income_usd"]
+    female  = af.loc[af["gender_label"] == "Female", "income_usd"]
+    mw      = scipy_stats.mannwhitneyu(male, female, alternative="two-sided")
+    return pd.DataFrame([
+        {"id": "K1", "question": "Income distributions differ across education levels?",
+         "test": "Kruskal-Wallis", "stat": float(kw_edu.statistic), "p": float(kw_edu.pvalue)},
+        {"id": "K2", "question": "Education monotonically associated with income?",
+         "test": "Spearman ρ",     "stat": float(sp.statistic),      "p": float(sp.pvalue)},
+        {"id": "K3", "question": "Men and women show different income distributions?",
+         "test": "Mann-Whitney U", "stat": float(mw.statistic),       "p": float(mw.pvalue)},
+        {"id": "K4", "question": "Income distributions differ across regions?",
+         "test": "Kruskal-Wallis (regions)", "stat": float(kw_reg.statistic), "p": float(kw_reg.pvalue)},
+    ])
 
 
-def get_tree_preprocessor() -> ColumnTransformer:
-    return ColumnTransformer(
-        transformers=[
-            ('numeric', SimpleImputer(strategy='median'), NUMERIC_FEATURES),
-            (
-                'categorical',
-                Pipeline(
-                    steps=[
-                        ('imputer', SimpleImputer(strategy='most_frequent')),
-                        ('encoder', OneHotEncoder(handle_unknown='ignore')),
-                    ]
-                ),
-                CATEGORICAL_FEATURES,
-            ),
-        ]
-    )
+# ── ML pipeline ───────────────────────────────────────────────────────────────
+def _linear_pre() -> ColumnTransformer:
+    return ColumnTransformer([
+        ("num", Pipeline([("imp", SimpleImputer(strategy="median")),
+                          ("sc",  StandardScaler())]), NUMERIC_FEATURES),
+        ("cat", Pipeline([("imp", SimpleImputer(strategy="most_frequent")),
+                          ("enc", OneHotEncoder(handle_unknown="ignore"))]), CATEGORICAL_FEATURES),
+    ])
 
 
-def collapse_feature_name(feature_name: str) -> str:
-    clean_name = feature_name.replace('numeric__', '').replace('categorical__', '')
-    for base_feature in NUMERIC_FEATURES + CATEGORICAL_FEATURES:
-        if clean_name == base_feature or clean_name.startswith(f'{base_feature}_'):
-            return base_feature
-    return clean_name
+def _tree_pre() -> ColumnTransformer:
+    return ColumnTransformer([
+        ("num", SimpleImputer(strategy="median"), NUMERIC_FEATURES),
+        ("cat", Pipeline([("imp", SimpleImputer(strategy="most_frequent")),
+                          ("enc", OneHotEncoder(handle_unknown="ignore"))]), CATEGORICAL_FEATURES),
+    ])
 
 
-def evaluate_model(model_name: str, y_true: pd.Series, y_pred: np.ndarray) -> dict[str, float | str]:
+def _collapse(name: str) -> str:
+    clean = name.replace("numeric__", "").replace("categorical__", "")
+    for base in NUMERIC_FEATURES + CATEGORICAL_FEATURES:
+        if clean == base or clean.startswith(f"{base}_"):
+            return base
+    return clean
+
+
+def _eval(name: str, y_true: pd.Series, y_pred: np.ndarray) -> dict:
     return {
-        'model': model_name,
-        'mae_usd': mean_absolute_error(y_true, y_pred),
-        'rmse_usd': mean_squared_error(y_true, y_pred) ** 0.5,
-        'r2': r2_score(y_true, y_pred),
+        "model": name,
+        "mae_usd": mean_absolute_error(y_true, y_pred),
+        "rmse_usd": mean_squared_error(y_true, y_pred) ** 0.5,
+        "r2": r2_score(y_true, y_pred),
     }
 
 
-def build_ml_cross_validation(
-    education_only: pd.DataFrame, multivariable_features: pd.DataFrame, target: pd.Series, models: dict[str, object]
-) -> pd.DataFrame:
-    cv = KFold(n_splits=5, shuffle=True, random_state=42)
-    scoring = {
-        'r2': 'r2',
-        'neg_mae': 'neg_mean_absolute_error',
-        'neg_mse': 'neg_mean_squared_error',
+def _build_models() -> dict:
+    models: dict = {
+        "Ridge": Pipeline([("pre", _linear_pre()),
+                           ("m", Ridge(alpha=1.0))]),
+        "Elastic Net": Pipeline([("pre", _linear_pre()),
+                                 ("m", ElasticNet(alpha=0.001, l1_ratio=0.1, max_iter=10000))]),
+        "Multivariable OLS": Pipeline([("pre", _linear_pre()),
+                                       ("m", LinearRegression())]),
+        "Gradient Boosting": Pipeline([("pre", _tree_pre()),
+                                       ("m", GradientBoostingRegressor(
+                                           n_estimators=300, learning_rate=0.05,
+                                           max_depth=4, subsample=0.8, random_state=42))]),
+        "Random Forest": Pipeline([("pre", _tree_pre()),
+                                   ("m", RandomForestRegressor(
+                                       n_estimators=400, max_depth=16,
+                                       min_samples_leaf=3, random_state=42, n_jobs=-1))]),
     }
-
-    rows: list[dict[str, float | str]] = []
-    for model_name, model in models.items():
-        feature_set = education_only if model_name == 'Education-only linear regression' else multivariable_features
-        scores = cross_validate(model, feature_set, target, cv=cv, scoring=scoring, n_jobs=1)
-        rmse_values = np.sqrt(-scores['test_neg_mse'])
-        rows.append(
-            {
-                'model': model_name,
-                'cv_r2_mean': float(scores['test_r2'].mean()),
-                'cv_r2_std': float(scores['test_r2'].std(ddof=0)),
-                'cv_mae_mean': float((-scores['test_neg_mae']).mean()),
-                'cv_mae_std': float((-scores['test_neg_mae']).std(ddof=0)),
-                'cv_rmse_mean': float(rmse_values.mean()),
-                'cv_rmse_std': float(rmse_values.std(ddof=0)),
-            }
-        )
-
-    return pd.DataFrame(rows).sort_values('cv_r2_mean', ascending=False)
+    if _HAS_XGB:
+        models["XGBoost"] = Pipeline([
+            ("pre", _tree_pre()),
+            ("m", XGBRegressor(
+                n_estimators=300, learning_rate=0.05, max_depth=5,
+                subsample=0.8, colsample_bytree=0.8,
+                random_state=42, verbosity=0, n_jobs=-1)),
+        ])
+    return models
 
 
-def run_models(
-    model_frame: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    target = model_frame['income_usd']
-    education_only = model_frame[['education_level']]
-    multivariable_features = model_frame[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
+def run_models(mf: pd.DataFrame):
+    target   = mf["income_usd"]
+    edu_only = mf[["education_level"]]
+    multi    = mf[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
 
-    X_train_edu, X_test_edu, y_train_edu, y_test_edu = train_test_split(
-        education_only, target, test_size=0.3, random_state=42
-    )
-    education_only_model = LinearRegression()
-    education_only_model.fit(X_train_edu, y_train_edu)
-    education_only_predictions = education_only_model.predict(X_test_edu)
+    Xte, Xve, yte, yve = train_test_split(edu_only, target, test_size=0.3, random_state=42)
+    edu_m = LinearRegression().fit(Xte, yte)
+    edu_p = edu_m.predict(Xve)
 
-    X_train_multi, X_test_multi, y_train_multi, y_test_multi = train_test_split(
-        multivariable_features, target, test_size=0.3, random_state=42
-    )
+    Xtr, Xts, ytr, yts = train_test_split(multi, target, test_size=0.3, random_state=42)
+    models  = _build_models()
+    rows    = [_eval("Education-only OLS", yve, edu_p)]
+    best_r2, best_name, best_model = float(rows[0]["r2"]), "Education-only OLS", None
 
-    models: dict[str, Pipeline] = {
-        'Elastic Net': Pipeline(
-            steps=[
-                ('preprocessor', get_linear_preprocessor()),
-                ('model', ElasticNet(alpha=0.001, l1_ratio=0.1, max_iter=10000)),
-            ]
-        ),
-        'Multivariable linear regression': Pipeline(
-            steps=[
-                ('preprocessor', get_linear_preprocessor()),
-                ('model', LinearRegression()),
-            ]
-        ),
-        'Gradient boosting': Pipeline(
-            steps=[
-                ('preprocessor', get_tree_preprocessor()),
-                (
-                    'model',
-                    GradientBoostingRegressor(
-                        n_estimators=250,
-                        learning_rate=0.05,
-                        max_depth=3,
-                        subsample=0.8,
-                        random_state=42,
-                    ),
-                ),
-            ]
-        ),
-        'Tuned random forest': Pipeline(
-            steps=[
-                ('preprocessor', get_tree_preprocessor()),
-                (
-                    'model',
-                    RandomForestRegressor(
-                        n_estimators=400,
-                        max_depth=16,
-                        min_samples_leaf=3,
-                        random_state=42,
-                        n_jobs=-1,
-                    ),
-                ),
-            ]
-        ),
-    }
+    for name, mdl in models.items():
+        mdl.fit(Xtr, ytr)
+        preds = mdl.predict(Xts)
+        m = _eval(name, yts, preds)
+        rows.append(m)
+        if m["r2"] > best_r2:
+            best_r2, best_name, best_model = float(m["r2"]), name, mdl
 
-    metrics_rows = [evaluate_model('Education-only linear regression', y_test_edu, education_only_predictions)]
-    best_model_name = 'Education-only linear regression'
-    best_r2 = float(metrics_rows[0]['r2'])
-    best_model: Pipeline | None = None
-
-    for model_name, model in models.items():
-        model.fit(X_train_multi, y_train_multi)
-        predictions = model.predict(X_test_multi)
-        metrics = evaluate_model(model_name, y_test_multi, predictions)
-        metrics_rows.append(metrics)
-        if metrics['r2'] > best_r2:
-            best_r2 = float(metrics['r2'])
-            best_model_name = model_name
-            best_model = model
-
-    model_comparison = pd.DataFrame(metrics_rows).sort_values('r2', ascending=False)
+    comparison = pd.DataFrame(rows).sort_values("r2", ascending=False)
 
     if best_model is None:
-        # The tuned random forest should dominate the education-only baseline, but keep a safe fallback.
-        best_model = models['Tuned random forest']
-        best_model.fit(X_train_multi, y_train_multi)
-        best_model_name = 'Tuned random forest'
+        best_model = models["Random Forest"]
+        best_model.fit(Xtr, ytr)
+        best_name = "Random Forest"
 
-    best_estimator = best_model.named_steps['model']
-    best_params = pd.DataFrame(
-        [
-            {'model': best_model_name, 'parameter': key, 'value': value}
-            for key, value in best_estimator.get_params().items()
-            if key in {'alpha', 'l1_ratio', 'learning_rate', 'max_depth', 'min_samples_leaf', 'n_estimators', 'subsample'}
-        ]
-    )
+    best_est = best_model.named_steps["m"]
 
-    if hasattr(best_estimator, 'feature_importances_'):
-        feature_names = best_model.named_steps['preprocessor'].get_feature_names_out()
-        feature_importance = pd.DataFrame(
-            {
-                'feature': feature_names,
-                'importance': best_estimator.feature_importances_,
-            }
-        )
-        feature_importance['feature_group'] = feature_importance['feature'].map(collapse_feature_name)
-        feature_importance = (
-            feature_importance.groupby('feature_group', as_index=False)['importance']
-            .sum()
-            .sort_values('importance', ascending=False)
+    # best hyperparameters
+    keep = {"alpha", "l1_ratio", "learning_rate", "max_depth",
+            "min_samples_leaf", "n_estimators", "subsample", "colsample_bytree"}
+    best_params = pd.DataFrame([
+        {"model": best_name, "parameter": k, "value": v}
+        for k, v in best_est.get_params().items() if k in keep
+    ])
+
+    # feature importance
+    if hasattr(best_est, "feature_importances_"):
+        fnames = best_model.named_steps["pre"].get_feature_names_out()
+        fi = (
+            pd.DataFrame({"feature": fnames, "importance": best_est.feature_importances_})
+            .assign(group=lambda d: d["feature"].map(_collapse))
+            .groupby("group", as_index=False)["importance"].sum()
+            .sort_values("importance", ascending=False)
+            .rename(columns={"group": "feature_group"})
         )
     else:
-        feature_importance = pd.DataFrame(columns=['feature_group', 'importance'])
+        fi = pd.DataFrame(columns=["feature_group", "importance"])
 
-    best_predictions = best_model.predict(X_test_multi)
-    prediction_frame = pd.DataFrame(
-        {
-            'actual_income': y_test_multi,
-            'predicted_income': best_predictions,
-            'model': best_model_name,
-        }
-    ).reset_index(drop=True)
-    cv_models: dict[str, object] = {'Education-only linear regression': LinearRegression(), **models}
-    ml_cross_validation = build_ml_cross_validation(education_only, multivariable_features, target, cv_models)
+    pred_frame = pd.DataFrame({
+        "actual": yts.values,
+        "predicted": best_model.predict(Xts),
+        "model": best_name,
+    })
 
-    return model_comparison, feature_importance, best_params, prediction_frame, ml_cross_validation
+    # 5-fold CV
+    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    scoring = {"r2": "r2", "neg_mae": "neg_mean_absolute_error",
+               "neg_mse": "neg_mean_squared_error"}
+    cv_rows = []
+    all_cv_models = {"Education-only OLS": LinearRegression(), **models}
+    for name, mdl in all_cv_models.items():
+        X = edu_only if name == "Education-only OLS" else multi
+        s = cross_validate(mdl, X, target, cv=cv, scoring=scoring, n_jobs=1)
+        rmse_v = np.sqrt(-s["test_neg_mse"])
+        cv_rows.append({
+            "model": name,
+            "cv_r2_mean": float(s["test_r2"].mean()),
+            "cv_r2_std":  float(s["test_r2"].std(ddof=0)),
+            "cv_rmse_mean": float(rmse_v.mean()),
+            "cv_rmse_std":  float(rmse_v.std(ddof=0)),
+        })
+    cv_df = pd.DataFrame(cv_rows).sort_values("cv_r2_mean", ascending=False)
+
+    return comparison, fi, best_params, pred_frame, cv_df, best_model, Xts, yts
 
 
-def run_econometric_models(model_frame: pd.DataFrame):
+# ── Econometrics ──────────────────────────────────────────────────────────────
+def run_econometric_models(mf: pd.DataFrame):
     formula = (
-        'log_income_usd ~ education_level + age_centered + I(age_centered ** 2) + family_member + year + '
-        'C(region_label) + C(gender_label) + C(marriage_label) + C(religion_label)'
+        "log_income_usd ~ education_level + age_centered + I(age_centered**2) "
+        "+ family_member + year "
+        "+ C(region_label) + C(gender_label) + C(marriage_label) + C(religion_label)"
     )
-    ols_base_model = smf.ols(formula, data=model_frame).fit()
-    ols_model = smf.ols(formula, data=model_frame).fit(cov_type='HC3')
-
-    quantile_models: dict[float, object] = {}
-    for quantile in (0.25, 0.5, 0.75):
-        quantile_models[quantile] = smf.quantreg(formula, data=model_frame).fit(q=quantile, max_iter=2000)
-
-    return ols_base_model, ols_model, quantile_models
+    ols_base = smf.ols(formula, data=mf).fit()
+    ols_hc3  = smf.ols(formula, data=mf).fit(cov_type="HC3")
+    qr = {q: smf.quantreg(formula, data=mf).fit(q=q, max_iter=2000) for q in (0.25, 0.5, 0.75)}
+    return ols_base, ols_hc3, qr
 
 
-def build_ols_summary(ols_model) -> pd.DataFrame:
-    key_terms = {
-        'education_level': 'Education step premium',
-        'age_centered': 'Age effect (centered)',
-        'I(age_centered ** 2)': 'Age squared',
-        'family_member': 'Household size effect',
-        'year': 'Survey year trend',
+def build_ols_summary(ols_hc3) -> pd.DataFrame:
+    terms = {
+        "education_level":       "Education step premium",
+        "age_centered":          "Age (centered, linear)",
+        "I(age_centered ** 2)":   "Age squared (lifecycle)",
+        "family_member":         "Household size",
+        "year":                  "Survey year trend",
     }
-
-    rows: list[dict[str, float | str]] = []
-    for term, label in key_terms.items():
-        coefficient = float(ols_model.params[term])
-        conf_int = ols_model.conf_int().loc[term]
-        rows.append(
-            {
-                'term': term,
-                'label': label,
-                'coefficient': coefficient,
-                'std_error': float(ols_model.bse[term]),
-                'p_value': float(ols_model.pvalues[term]),
-                'ci_low': float(conf_int.iloc[0]),
-                'ci_high': float(conf_int.iloc[1]),
-                'approx_pct_effect': (np.exp(coefficient) - 1) * 100,
-            }
-        )
-
+    rows = []
+    for term, label in terms.items():
+        coef = float(ols_hc3.params[term])
+        ci   = ols_hc3.conf_int().loc[term]
+        rows.append({
+            "term": term, "label": label,
+            "coefficient": coef,
+            "std_error": float(ols_hc3.bse[term]),
+            "p_value": float(ols_hc3.pvalues[term]),
+            "ci_low": float(ci.iloc[0]),
+            "ci_high": float(ci.iloc[1]),
+            "pct_effect": (np.exp(coef) - 1) * 100,
+        })
     return pd.DataFrame(rows)
 
 
-def build_econometric_diagnostics(ols_base_model) -> pd.DataFrame:
-    bp_lm, bp_lm_pvalue, bp_fvalue, bp_f_pvalue = het_breuschpagan(ols_base_model.resid, ols_base_model.model.exog)
-    reset_result = linear_reset(ols_base_model, power=2, use_f=True)
-    jb_result = scipy_stats.jarque_bera(ols_base_model.resid)
+def build_econometric_diagnostics(ols_base) -> pd.DataFrame:
+    bp_lm, bp_lm_p, bp_f, bp_f_p = het_breuschpagan(ols_base.resid, ols_base.model.exog)
+    reset  = linear_reset(ols_base, power=2, use_f=True)
+    jb     = scipy_stats.jarque_bera(ols_base.resid)
+    return pd.DataFrame([
+        {"diagnostic": "Adjusted R²",    "stat": float(ols_base.rsquared_adj), "p": np.nan},
+        {"diagnostic": "Breusch-Pagan LM", "stat": float(bp_lm), "p": float(bp_lm_p)},
+        {"diagnostic": "Breusch-Pagan F",  "stat": float(bp_f),  "p": float(bp_f_p)},
+        {"diagnostic": "RESET F",          "stat": float(reset.fvalue), "p": float(reset.pvalue)},
+        {"diagnostic": "Jarque-Bera",      "stat": float(jb.statistic), "p": float(jb.pvalue)},
+        {"diagnostic": "Observations",     "stat": float(ols_base.nobs), "p": np.nan},
+    ])
 
-    return pd.DataFrame(
-        [
-            {
-                'diagnostic': 'Adjusted R-squared',
-                'statistic': float(ols_base_model.rsquared_adj),
-                'p_value': np.nan,
-                'interpretation': 'Share of log-income variation explained by the multivariable OLS benchmark.',
-            },
-            {
-                'diagnostic': 'Breusch-Pagan LM',
-                'statistic': float(bp_lm),
-                'p_value': float(bp_lm_pvalue),
-                'interpretation': 'Tests whether residual variance changes systematically with fitted covariates.',
-            },
-            {
-                'diagnostic': 'Breusch-Pagan F',
-                'statistic': float(bp_fvalue),
-                'p_value': float(bp_f_pvalue),
-                'interpretation': 'F-statistic version of the heteroskedasticity diagnostic.',
-            },
-            {
-                'diagnostic': 'RESET F',
-                'statistic': float(reset_result.fvalue),
-                'p_value': float(reset_result.pvalue),
-                'interpretation': 'Signals whether additional nonlinear terms would improve specification.',
-            },
-            {
-                'diagnostic': 'Jarque-Bera',
-                'statistic': float(jb_result.statistic),
-                'p_value': float(jb_result.pvalue),
-                'interpretation': 'Checks the normality of residuals in the semilog specification.',
-            },
-            {
-                'diagnostic': 'Observations',
-                'statistic': float(ols_base_model.nobs),
-                'p_value': np.nan,
-                'interpretation': 'Trimmed modeling sample used for the econometric layer.',
-            },
-        ]
+
+def build_econometric_vif(mf: pd.DataFrame) -> pd.DataFrame:
+    design = sm.add_constant(
+        mf[["education_level", "age_centered", "age_centered_sq", "family_member", "year"]].dropna(),
+        has_constant="add",
     )
+    return pd.DataFrame([
+        {"term": col, "vif": float(variance_inflation_factor(design.values, i))}
+        for i, col in enumerate(design.columns) if col != "const"
+    ])
 
 
-def build_econometric_vif(model_frame: pd.DataFrame) -> pd.DataFrame:
-    design = model_frame[['education_level', 'age_centered', 'age_centered_sq', 'family_member', 'year']].dropna()
-    design = sm.add_constant(design, has_constant='add')
-    rows: list[dict[str, float | str]] = []
-
-    for index, column in enumerate(design.columns):
-        if column == 'const':
-            continue
-        rows.append(
-            {
-                'term': column,
-                'vif': float(variance_inflation_factor(design.values, index)),
-                'interpretation': 'Centered age terms keep multicollinearity at manageable levels.',
-            }
-        )
-
-    return pd.DataFrame(rows)
-
-
-def build_quantile_summary(quantile_models: dict[float, object]) -> pd.DataFrame:
-    rows: list[dict[str, float | str]] = []
-    for quantile, model in quantile_models.items():
-        conf_int = model.conf_int().loc['education_level']
-        coefficient = float(model.params['education_level'])
-        rows.append(
-            {
-                'model': f'Quantile regression ({int(quantile * 100)}th percentile)',
-                'quantile': quantile,
-                'education_coefficient': coefficient,
-                'education_ci_low': float(conf_int.iloc[0]),
-                'education_ci_high': float(conf_int.iloc[1]),
-                'education_pct_premium': (np.exp(coefficient) - 1) * 100,
-                'family_member_coefficient': float(model.params['family_member']),
-                'year_coefficient': float(model.params['year']),
-                'pseudo_r2': float(model.prsquared),
-            }
-        )
-
-    return pd.DataFrame(rows).sort_values('quantile')
+def build_quantile_summary(qr: dict) -> pd.DataFrame:
+    rows = []
+    for q, mdl in qr.items():
+        ci   = mdl.conf_int().loc["education_level"]
+        coef = float(mdl.params["education_level"])
+        rows.append({
+            "model": f"Q{int(q*100)} regression",
+            "quantile": q,
+            "education_coef": coef,
+            "ci_low": float(ci.iloc[0]),
+            "ci_high": float(ci.iloc[1]),
+            "pct_premium": (np.exp(coef) - 1) * 100,
+            "family_member_coef": float(mdl.params["family_member"]),
+            "year_coef": float(mdl.params["year"]),
+            "pseudo_r2": float(mdl.prsquared),
+        })
+    return pd.DataFrame(rows).sort_values("quantile")
 
 
-def export_tables(
-    education_summary: pd.DataFrame,
-    region_summary: pd.DataFrame,
-    year_summary: pd.DataFrame,
-    statistical_tests: pd.DataFrame,
-    model_comparison: pd.DataFrame,
-    feature_importance: pd.DataFrame,
-    best_params: pd.DataFrame,
-    ols_summary: pd.DataFrame,
-    econometric_diagnostics: pd.DataFrame,
-    econometric_vif: pd.DataFrame,
-    quantile_summary: pd.DataFrame,
-    ml_cross_validation: pd.DataFrame,
+def build_bootstrap_education_premium(mf: pd.DataFrame, n: int = BOOTSTRAP_N) -> pd.DataFrame:
+    """Bootstrap distribution of the OLS education premium (log-scale coef)."""
+    formula = (
+        "log_income_usd ~ education_level + age_centered + I(age_centered**2) "
+        "+ family_member + year + C(region_label) + C(gender_label)"
+    )
+    rng  = np.random.default_rng(42)
+    coefs = []
+    for _ in range(n):
+        s = mf.sample(len(mf), replace=True, random_state=int(rng.integers(0, 2**31)))
+        coefs.append(float(smf.ols(formula, data=s).fit().params["education_level"]))
+    return pd.DataFrame({"bootstrap_coef": coefs,
+                         "pct_premium": [(np.exp(c) - 1) * 100 for c in coefs]})
+
+
+# ── Style helpers ─────────────────────────────────────────────────────────────
+def _style() -> None:
+    sns.set_theme(style="whitegrid", font_scale=1.08)
+    plt.rcParams.update({
+        "axes.spines.top":   False,
+        "axes.spines.right": False,
+        "axes.edgecolor":    "#cccccc",
+        "grid.color":        "#e5e5e5",
+        "grid.linewidth":    0.7,
+        "figure.facecolor":  "white",
+        "axes.facecolor":    "white",
+        "font.family":       "sans-serif",
+    })
+
+
+def _save(name: str) -> None:
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / name, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close()
+
+
+# ── Individual figure functions ───────────────────────────────────────────────
+
+def fig01_income_by_education(edu_summary: pd.DataFrame) -> None:
+    _style()
+    short_map  = {v: k for k, v in EDU_FULL.items()}
+    s = edu_summary.copy()
+    s["short"] = s["education_label"].map({v: EDU_SHORT[k] for k, v in EDU_FULL.items()})
+    s = s.dropna(subset=["short"])
+
+    fig, ax = plt.subplots(figsize=(13, 6))
+    bars = ax.bar(range(len(s)), s["mean_usd"], color=NAVY, width=0.6, zorder=3, alpha=0.9)
+    # IQR whiskers
+    for i, (_, row) in enumerate(s.iterrows()):
+        ax.plot([i, i], [row["p25"], row["p75"]],
+                color=AMBER, linewidth=2.5, solid_capstyle="round", zorder=4)
+        ax.plot(i, row["median_usd"], "o", color=AMBER, markersize=6, zorder=5)
+    ax.set_xticks(range(len(s)))
+    ax.set_xticklabels(s["short"], rotation=0, ha="center", fontsize=9)
+    ax.set_title("Average income by education level\n(amber line = IQR, dot = median)",
+                 fontsize=13, pad=14)
+    ax.set_ylabel("Income (USD / month)")
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax.grid(axis="y", alpha=0.5, zorder=0)
+    _save("fig01_income_by_education.png")
+
+
+def fig02_income_distribution_by_education(af: pd.DataFrame) -> None:
+    _style()
+    order = [EDU_SHORT[k] for k in sorted(EDU_SHORT)]
+    af2   = af.copy()
+    af2["edu_s"] = af2["education_level"].map(EDU_SHORT)
+    # cap at 97th for visual clarity
+    cap   = af2["income_usd"].quantile(0.97)
+    af2   = af2[af2["income_usd"] <= cap]
+
+    fig, ax = plt.subplots(figsize=(13, 6))
+    sns.violinplot(
+        data=af2, x="edu_s", y="income_usd",
+        order=[o for o in order if o in af2["edu_s"].unique()],
+        color=NAVY, inner="quartile", linewidth=0.9,
+        alpha=0.75, cut=0, ax=ax,
+    )
+    ax.set_title("Income distribution by education level (violin + quartiles)",
+                 fontsize=13, pad=14)
+    ax.set_xlabel("Education level")
+    ax.set_ylabel("Income (USD / month)")
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax.tick_params(axis="x", rotation=0, labelsize=9)
+    _save("fig02_income_distribution_education.png")
+
+
+def fig03_income_by_region(region_summary: pd.DataFrame) -> None:
+    _style()
+    s = region_summary.sort_values("median_usd", ascending=True)
+    fig, ax = plt.subplots(figsize=(11, 5))
+    bars = ax.barh(s["region_label"], s["median_usd"], color=AMBER, zorder=3, alpha=0.9)
+    ax.bar_label(bars, fmt="$%.0f", padding=5, fontsize=9)
+    ax.set_title("Median monthly income by region", fontsize=13, pad=14)
+    ax.set_xlabel("Median income (USD / month)")
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax.grid(axis="x", alpha=0.5, zorder=0)
+    _save("fig03_median_income_by_region.png")
+
+
+def fig04_income_trend_over_time(year_summary: pd.DataFrame) -> None:
+    _style()
+    s = year_summary.copy()
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.fill_between(s["year"], s["median_usd"], alpha=0.12, color=TEAL)
+    ax.plot(s["year"], s["median_usd"], marker="o", linewidth=2.2, color=TEAL, label="Median")
+    ax.plot(s["year"], s["mean_usd"],   marker="s", linewidth=2.2, linestyle="--",
+            color=AMBER, label="Mean")
+    ax.set_title("Income trend across survey waves", fontsize=13, pad=14)
+    ax.set_xlabel("Survey year")
+    ax.set_ylabel("Income (USD / month)")
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax.legend(frameon=False)
+    ax.grid(alpha=0.4)
+    _save("fig04_income_trend_over_time.png")
+
+
+def fig05_gender_income_gap(af: pd.DataFrame) -> None:
+    _style()
+    s = (
+        af.groupby("gender_label", dropna=False)["income_usd"]
+        .agg(["median", "mean", "count"])
+        .reset_index().dropna(subset=["gender_label"])
+    )
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    for ax, metric, label, title in [
+        (axes[0], "median", "Median income (USD)", "Median"),
+        (axes[1], "mean",   "Mean income (USD)",   "Mean"),
+    ]:
+        colors = [NAVY, AMBER]
+        bars = ax.bar(s["gender_label"], s[metric], color=colors, width=0.5, zorder=3, alpha=0.9)
+        ax.bar_label(bars, fmt="$%.0f", padding=4, fontsize=11)
+        ax.set_title(f"{title} income by gender", fontsize=12, pad=10)
+        ax.set_ylabel(label)
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+        ax.grid(axis="y", alpha=0.4, zorder=0)
+        gap = (s[metric].iloc[0] - s[metric].iloc[1]) / s[metric].iloc[0] * 100
+        ax.text(0.5, 0.06, f"Gap: {gap:.1f}%", ha="center", va="bottom",
+                transform=ax.transAxes, fontsize=10, color=RED)
+    fig.suptitle("Raw gender income gap (unconditional)", fontsize=13, y=1.01)
+    _save("fig05_gender_income_gap.png")
+
+
+def fig06_gender_gap_by_education(gender_edu: pd.DataFrame) -> None:
+    _style()
+    pivot = gender_edu.pivot(index="edu_short", columns="gender_label", values="median_usd")
+    if "Male" not in pivot.columns or "Female" not in pivot.columns:
+        return
+    pivot = pivot.dropna()
+    pivot["gap_pct"] = (pivot["Male"] - pivot["Female"]) / pivot["Male"] * 100
+    pivot["order"]   = pivot.index.map({v: k for k, v in EDU_SHORT.items()})
+    pivot = pivot.sort_values("order")
+
+    fig, ax = plt.subplots(figsize=(13, 6))
+    colors = [RED if g > pivot["gap_pct"].mean() else PURPLE for g in pivot["gap_pct"]]
+    ax.bar(pivot.index, pivot["gap_pct"], color=colors, zorder=3, alpha=0.9)
+    ax.axhline(pivot["gap_pct"].mean(), color=SLATE, linewidth=1.4,
+               linestyle="--", label=f"Sample avg ({pivot['gap_pct'].mean():.1f}%)")
+    ax.set_title("Gender income gap by education level\n"
+                 "(% by which male median exceeds female median)", fontsize=13, pad=14)
+    ax.set_xlabel("Education level")
+    ax.set_ylabel("Gender gap (%)")
+    ax.tick_params(axis="x", rotation=0, labelsize=9)
+    ax.legend(frameon=False)
+    ax.grid(axis="y", alpha=0.4, zorder=0)
+    _save("fig06_gender_gap_by_education.png")
+
+
+def fig07_hypothesis_tests(stat_tests: pd.DataFrame) -> None:
+    _style()
+    t = stat_tests.copy()
+    t["neg_log_p"] = -np.log10(t["p"].clip(lower=1e-300))
+    colors = [NAVY if v > 2 else AMBER for v in t["neg_log_p"]]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    bars = ax.barh(t["id"], t["neg_log_p"], color=colors, zorder=3, alpha=0.9)
+    ax.bar_label(bars, fmt="%.0f", padding=4, fontsize=9, label_type="edge")
+    ax.axvline(2, color=RED, linestyle="--", linewidth=1.4, label="p = 0.01 threshold")
+    ax.set_title("Statistical significance of hypothesis tests (−log₁₀ p)", fontsize=13, pad=14)
+    ax.set_xlabel("−log₁₀(p-value)  [higher = more significant]")
+    ax.set_ylabel("Test")
+    ax.legend(frameon=False)
+    ax.grid(axis="x", alpha=0.4, zorder=0)
+    # annotations
+    labels = {"K1": "Education vs income", "K2": "Spearman rank",
+              "K3": "Gender gap",          "K4": "Regional gap"}
+    for _, row in t.iterrows():
+        ax.text(0.3, list(t["id"]).index(row["id"]),
+                labels.get(row["id"], ""), va="center", fontsize=8.5, color="white")
+    _save("fig07_hypothesis_tests.png")
+
+
+def fig08_ols_coefficients(ols_summary: pd.DataFrame) -> None:
+    _style()
+    s = ols_summary.copy()
+    s["err_lo"] = s["coefficient"] - s["ci_low"]
+    s["err_hi"] = s["ci_high"] - s["coefficient"]
+    colors = [TEAL if p < 0.001 else AMBER for p in s["p_value"]]
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    x = np.arange(len(s))
+    ax.bar(x, s["coefficient"], color=colors, alpha=0.85, zorder=3, width=0.55)
+    ax.errorbar(x, s["coefficient"],
+                yerr=[s["err_lo"], s["err_hi"]],
+                fmt="none", ecolor=RED, capsize=6, linewidth=1.6, zorder=4)
+    ax.axhline(0, color=SLATE, linewidth=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels(s["label"], rotation=18, ha="right", fontsize=10)
+    ax.set_title("OLS earnings equation — key coefficients with 95 % HC3 CI\n"
+                 "(teal = p<0.001)", fontsize=13, pad=14)
+    ax.set_ylabel("Coefficient (log-income scale)")
+    ax.grid(axis="y", alpha=0.4, zorder=0)
+    _save("fig08_ols_coefficients.png")
+
+
+def fig09_ols_diagnostics(mf: pd.DataFrame, ols_base) -> None:
+    _style()
+    resid  = ols_base.resid
+    fitted = ols_base.fittedvalues
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    # Q-Q
+    (osm, osr), (slope, intercept, _) = scipy_stats.probplot(resid, dist="norm")
+    axes[0].scatter(osm, osr, s=5, alpha=0.25, color=NAVY, zorder=3)
+    axes[0].plot([min(osm), max(osm)],
+                 [slope * min(osm) + intercept, slope * max(osm) + intercept],
+                 color=RED, linewidth=1.8)
+    axes[0].set_title("Normal Q-Q (residuals)", fontsize=11)
+    axes[0].set_xlabel("Theoretical quantiles")
+    axes[0].set_ylabel("Sample quantiles")
+
+    # Residuals vs fitted (density-coloured)
+    axes[1].scatter(fitted, resid, s=4, alpha=0.20, color=TEAL, zorder=3)
+    axes[1].axhline(0, color=RED, linewidth=1.8, linestyle="--")
+    # LOWESS smoother
+    from statsmodels.nonparametric.smoothers_lowess import lowess
+    lw = lowess(resid, fitted, frac=0.15)
+    axes[1].plot(lw[:, 0], lw[:, 1], color=AMBER, linewidth=2, label="LOWESS")
+    axes[1].set_title("Residuals vs fitted (LOWESS overlay)", fontsize=11)
+    axes[1].set_xlabel("Fitted log-income")
+    axes[1].set_ylabel("Residuals")
+    axes[1].legend(frameon=False, fontsize=9)
+
+    fig.suptitle("OLS diagnostic plots — semilog earnings equation", fontsize=13, y=1.02)
+    _save("fig09_ols_diagnostics.png")
+
+
+def fig10_education_premium_by_quantile(
+    ols_summary: pd.DataFrame, q_summary: pd.DataFrame,
+    bootstrap_df: pd.DataFrame,
 ) -> None:
-    education_summary.to_csv(TABLES_DIR / 'education_income_summary.csv', index=False)
-    region_summary.to_csv(TABLES_DIR / 'region_income_summary.csv', index=False)
-    year_summary.to_csv(TABLES_DIR / 'year_income_summary.csv', index=False)
-    statistical_tests.to_csv(TABLES_DIR / 'statistical_tests.csv', index=False)
-    model_comparison.to_csv(TABLES_DIR / 'model_comparison.csv', index=False)
-    feature_importance.to_csv(TABLES_DIR / 'feature_importance.csv', index=False)
-    best_params.to_csv(TABLES_DIR / 'ml_best_params.csv', index=False)
-    ols_summary.to_csv(TABLES_DIR / 'econometric_ols_summary.csv', index=False)
-    econometric_diagnostics.to_csv(TABLES_DIR / 'econometric_diagnostics.csv', index=False)
-    econometric_vif.to_csv(TABLES_DIR / 'econometric_vif.csv', index=False)
-    quantile_summary.to_csv(TABLES_DIR / 'quantile_regression_summary.csv', index=False)
-    ml_cross_validation.to_csv(TABLES_DIR / 'ml_cross_validation.csv', index=False)
+    _style()
+    ols_row = ols_summary.loc[ols_summary["term"] == "education_level"].iloc[0]
+    combined = pd.concat([
+        pd.DataFrame([{
+            "model": "OLS (mean)",
+            "prem": (np.exp(ols_row["coefficient"]) - 1) * 100,
+            "lo":   (np.exp(ols_row["ci_low"])  - 1) * 100,
+            "hi":   (np.exp(ols_row["ci_high"]) - 1) * 100,
+        }]),
+        q_summary.assign(
+            prem = lambda d: d["pct_premium"],
+            lo   = lambda d: (np.exp(d["ci_low"])  - 1) * 100,
+            hi   = lambda d: (np.exp(d["ci_high"]) - 1) * 100,
+        )[["model", "prem", "lo", "hi"]],
+    ], ignore_index=True)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left: point estimates + CI
+    x = np.arange(len(combined))
+    axes[0].errorbar(x, combined["prem"],
+                     yerr=[combined["prem"] - combined["lo"],
+                           combined["hi"]   - combined["prem"]],
+                     fmt="o", capsize=7, color=NAVY,
+                     linewidth=2, markersize=9, zorder=4)
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(combined["model"], rotation=18, ha="right", fontsize=10)
+    axes[0].set_title("Education premium:\nOLS mean vs quantile regressions", fontsize=11)
+    axes[0].set_ylabel("Income premium per step (%)")
+    axes[0].grid(axis="y", alpha=0.4)
+
+    # Right: bootstrap distribution
+    axes[1].hist(bootstrap_df["pct_premium"], bins=40,
+                 color=TEAL, edgecolor="white", alpha=0.85)
+    pct_lo = np.percentile(bootstrap_df["pct_premium"], 2.5)
+    pct_hi = np.percentile(bootstrap_df["pct_premium"], 97.5)
+    axes[1].axvline(pct_lo, color=RED, linestyle="--", linewidth=1.5,
+                    label=f"95 % CI [{pct_lo:.1f}%, {pct_hi:.1f}%]")
+    axes[1].axvline(pct_hi, color=RED, linestyle="--", linewidth=1.5)
+    axes[1].axvline(bootstrap_df["pct_premium"].mean(), color=AMBER,
+                    linewidth=2, label=f"Mean {bootstrap_df['pct_premium'].mean():.2f}%")
+    axes[1].set_title(f"Bootstrap distribution of education premium\n({BOOTSTRAP_N} iterations)",
+                      fontsize=11)
+    axes[1].set_xlabel("Premium (%)")
+    axes[1].set_ylabel("Count")
+    axes[1].legend(frameon=False, fontsize=9)
+
+    fig.suptitle("Education income premium — stability and distributional heterogeneity",
+                 fontsize=13, y=1.02)
+    _save("fig10_education_premium_by_quantile.png")
+
+
+def fig11_model_comparison(comparison: pd.DataFrame) -> None:
+    _style()
+    s = comparison.sort_values("r2")
+    max_r2 = s["r2"].max()
+    colors = [RED if abs(r - max_r2) < 1e-9 else NAVY for r in s["r2"]]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars = ax.barh(s["model"], s["r2"], color=colors, zorder=3, alpha=0.9)
+    ax.bar_label(bars, fmt="%.3f", padding=5, fontsize=9.5)
+    ax.set_title("Out-of-sample R² — model comparison (30 % holdout)", fontsize=13, pad=14)
+    ax.set_xlabel("R-squared")
+    ax.set_xlim(0, 0.9)
+    ax.axvline(0.5, color=SLATE, linewidth=0.8, linestyle=":")
+    ax.grid(axis="x", alpha=0.4, zorder=0)
+    _save("fig11_model_comparison.png")
+
+
+def fig12_cross_validation(cv_df: pd.DataFrame) -> None:
+    _style()
+    s = cv_df.sort_values("cv_r2_mean")
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars = ax.barh(s["model"], s["cv_r2_mean"], color=TEAL, alpha=0.85, zorder=3)
+    ax.errorbar(
+        s["cv_r2_mean"], np.arange(len(s)),
+        xerr=s["cv_r2_std"],
+        fmt="none", ecolor=RED, capsize=5, linewidth=1.6, zorder=4,
+    )
+    ax.bar_label(bars, fmt="%.3f", padding=5, fontsize=9.5)
+    ax.set_title("Five-fold cross-validated R² (mean ± std)", fontsize=13, pad=14)
+    ax.set_xlabel("CV R-squared")
+    ax.set_xlim(0, 0.9)
+    ax.grid(axis="x", alpha=0.4, zorder=0)
+    _save("fig12_cross_validation_r2.png")
+
+
+def fig13_feature_importance(fi: pd.DataFrame) -> None:
+    _style()
+    s = fi.head(8).sort_values("importance")
+    fig, ax = plt.subplots(figsize=(11, 5))
+    colors = [RED if s.iloc[i]["importance"] == s["importance"].max() else PURPLE
+              for i in range(len(s))]
+    bars = ax.barh(s["feature_group"], s["importance"], color=colors, zorder=3, alpha=0.9)
+    ax.bar_label(bars, fmt="%.3f", padding=4, fontsize=9)
+    ax.set_title("Feature group importance — best ML model\n(red = dominant predictor)",
+                 fontsize=13, pad=14)
+    ax.set_xlabel("Importance (mean impurity decrease)")
+    ax.grid(axis="x", alpha=0.4, zorder=0)
+    _save("fig13_feature_importance.png")
+
+
+def fig14_actual_vs_predicted(pred_frame: pd.DataFrame) -> None:
+    _style()
+    pf = pred_frame.copy()
+    mn = min(pf["actual"].min(), pf["predicted"].min())
+    mx = max(pf["actual"].max(), pf["predicted"].max())
+    r2 = r2_score(pf["actual"], pf["predicted"])
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.scatter(pf["actual"], pf["predicted"],
+               s=7, alpha=0.25, color=NAVY, zorder=3, rasterized=True)
+    ax.plot([mn, mx], [mn, mx], color=RED, linewidth=1.8, label="Perfect fit")
+    # ±20 % band
+    ax.fill_between([mn, mx], [mn * 0.8, mx * 0.8], [mn * 1.2, mx * 1.2],
+                    alpha=0.08, color=AMBER, label="±20% band")
+    ax.set_title(f"Actual vs predicted income\n{pf['model'].iloc[0]}  (R² = {r2:.3f})",
+                 fontsize=13, pad=14)
+    ax.set_xlabel("Actual income (USD)")
+    ax.set_ylabel("Predicted income (USD)")
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax.legend(frameon=False)
+    _save("fig14_actual_vs_predicted.png")
+
+
+# ── Export wrappers ───────────────────────────────────────────────────────────
+def export_tables(
+    edu_s, reg_s, yr_s, stat_tests,
+    comparison, fi, best_params,
+    ols_s, diag, vif, q_s, cv_df, bootstrap_df,
+) -> None:
+    edu_s.to_csv(TABLES_DIR / "education_income_summary.csv", index=False)
+    reg_s.to_csv(TABLES_DIR / "region_income_summary.csv", index=False)
+    yr_s.to_csv(TABLES_DIR  / "year_income_summary.csv", index=False)
+    stat_tests.to_csv(TABLES_DIR  / "statistical_tests.csv", index=False)
+    comparison.to_csv(TABLES_DIR  / "model_comparison.csv", index=False)
+    fi.to_csv(TABLES_DIR          / "feature_importance.csv", index=False)
+    best_params.to_csv(TABLES_DIR / "ml_best_params.csv", index=False)
+    ols_s.to_csv(TABLES_DIR       / "econometric_ols_summary.csv", index=False)
+    diag.to_csv(TABLES_DIR        / "econometric_diagnostics.csv", index=False)
+    vif.to_csv(TABLES_DIR         / "econometric_vif.csv", index=False)
+    q_s.to_csv(TABLES_DIR         / "quantile_regression_summary.csv", index=False)
+    cv_df.to_csv(TABLES_DIR       / "ml_cross_validation.csv", index=False)
+    bootstrap_df.to_csv(TABLES_DIR / "bootstrap_education_premium.csv", index=False)
 
 
 def export_figures(
-    education_summary: pd.DataFrame,
-    region_summary: pd.DataFrame,
-    year_summary: pd.DataFrame,
-    model_comparison: pd.DataFrame,
-    feature_importance: pd.DataFrame,
-    ols_summary: pd.DataFrame,
-    quantile_summary: pd.DataFrame,
-    prediction_frame: pd.DataFrame,
-    ml_cross_validation: pd.DataFrame,
+    edu_s, af, reg_s, yr_s, gender_edu,
+    stat_tests, ols_s, mf, ols_base,
+    q_s, bootstrap_df, comparison, cv_df, fi, pred_frame,
 ) -> None:
-    sns.set_theme(style='whitegrid')
-
-    plt.figure(figsize=(12, 6))
-    sns.barplot(
-        data=education_summary,
-        x='education_label',
-        y='average_income_usd',
-        color='#145da0',
-    )
-    plt.title('Average income by education level')
-    plt.xlabel('Education level')
-    plt.ylabel('Average income (USD)')
-    plt.xticks(rotation=30, ha='right')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'income_by_education.png', dpi=150)
-    plt.close()
-
-    plt.figure(figsize=(12, 6))
-    sns.barplot(
-        data=region_summary,
-        x='region_label',
-        y='median_income_usd',
-        color='#c9772b',
-    )
-    plt.title('Median income by region')
-    plt.xlabel('Region')
-    plt.ylabel('Median income (USD)')
-    plt.xticks(rotation=25, ha='right')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'median_income_by_region.png', dpi=150)
-    plt.close()
-
-    plt.figure(figsize=(12, 6))
-    sns.lineplot(
-        data=year_summary,
-        x='year',
-        y='median_income_usd',
-        marker='o',
-        linewidth=2.2,
-        color='#0f7b6c',
-    )
-    plt.title('Median income trend over time')
-    plt.xlabel('Year')
-    plt.ylabel('Median income (USD)')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'median_income_over_time.png', dpi=150)
-    plt.close()
-
-    ols_effects = ols_summary.copy()
-    plt.figure(figsize=(10, 5))
-    sns.barplot(data=ols_effects, x='label', y='approx_pct_effect', hue='label', dodge=False, palette='Blues_d')
-    legend = plt.gca().get_legend()
-    if legend is not None:
-        legend.remove()
-    plt.axhline(0, color='#333333', linewidth=1)
-    plt.title('Key effects from the OLS earnings equation')
-    plt.xlabel('')
-    plt.ylabel('Approximate percent effect')
-    plt.xticks(rotation=18, ha='right')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'ols_key_effects.png', dpi=150)
-    plt.close()
-
-    top_features = feature_importance.head(10).copy()
-    plt.figure(figsize=(12, 7))
-    sns.barplot(
-        data=top_features,
-        x='importance',
-        y='feature_group',
-        color='#7a4cc2',
-    )
-    plt.title('Top feature groups in the tuned random forest')
-    plt.xlabel('Importance')
-    plt.ylabel('Feature group')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'top_feature_importance.png', dpi=150)
-    plt.close()
-
-    education_effect = pd.concat(
-        [
-            pd.DataFrame(
-                [
-                    {
-                        'model': 'OLS mean effect',
-                        'premium_pct': float(
-                            ols_summary.loc[ols_summary['term'] == 'education_level', 'approx_pct_effect'].iloc[0]
-                        ),
-                        'ci_low_pct': (
-                            np.exp(float(ols_summary.loc[ols_summary['term'] == 'education_level', 'ci_low'].iloc[0])) - 1
-                        ) * 100,
-                        'ci_high_pct': (
-                            np.exp(float(ols_summary.loc[ols_summary['term'] == 'education_level', 'ci_high'].iloc[0])) - 1
-                        ) * 100,
-                    }
-                ]
-            ),
-            quantile_summary.rename(columns={'education_pct_premium': 'premium_pct'})[
-                ['model', 'premium_pct', 'education_ci_low', 'education_ci_high']
-            ].assign(
-                ci_low_pct=lambda frame: (np.exp(frame['education_ci_low']) - 1) * 100,
-                ci_high_pct=lambda frame: (np.exp(frame['education_ci_high']) - 1) * 100,
-            )[['model', 'premium_pct', 'ci_low_pct', 'ci_high_pct']],
-        ],
-        ignore_index=True,
-    )
-
-    plt.figure(figsize=(11, 6))
-    x_positions = np.arange(len(education_effect))
-    errors = np.vstack(
-        [
-            education_effect['premium_pct'] - education_effect['ci_low_pct'],
-            education_effect['ci_high_pct'] - education_effect['premium_pct'],
-        ]
-    )
-    plt.errorbar(
-        x_positions,
-        education_effect['premium_pct'],
-        yerr=errors,
-        fmt='o',
-        capsize=5,
-        color='#145da0',
-        linewidth=1.8,
-    )
-    plt.xticks(x_positions, education_effect['model'], rotation=20, ha='right')
-    plt.ylabel('Income premium per education step (%)')
-    plt.title('Education premium across mean and quantile regressions')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'education_premium_by_quantile.png', dpi=150)
-    plt.close()
-
-    plt.figure(figsize=(11, 6))
-    sns.barplot(data=model_comparison, x='model', y='r2', color='#2e8b57')
-    plt.title('Out-of-sample model comparison')
-    plt.xlabel('Model')
-    plt.ylabel('R-squared')
-    plt.xticks(rotation=20, ha='right')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'model_performance_r2.png', dpi=150)
-    plt.close()
-
-    plt.figure(figsize=(11, 6))
-    sns.barplot(data=ml_cross_validation, x='model', y='cv_r2_mean', hue='model', dodge=False, palette='rocket')
-    legend = plt.gca().get_legend()
-    if legend is not None:
-        legend.remove()
-    plt.errorbar(
-        x=np.arange(len(ml_cross_validation)),
-        y=ml_cross_validation['cv_r2_mean'],
-        yerr=ml_cross_validation['cv_r2_std'],
-        fmt='none',
-        ecolor='#213547',
-        capsize=4,
-        linewidth=1.5,
-    )
-    plt.title('Five-fold cross-validation R-squared')
-    plt.xlabel('Model')
-    plt.ylabel('Cross-validated R-squared')
-    plt.xticks(rotation=18, ha='right')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'ml_cross_validation_r2.png', dpi=150)
-    plt.close()
-
-    plt.figure(figsize=(7, 7))
-    plot_frame = prediction_frame.copy().sort_values('actual_income')
-    sns.scatterplot(data=plot_frame, x='actual_income', y='predicted_income', s=18, alpha=0.45, color='#1f4b6e')
-    min_value = min(plot_frame['actual_income'].min(), plot_frame['predicted_income'].min())
-    max_value = max(plot_frame['actual_income'].max(), plot_frame['predicted_income'].max())
-    plt.plot([min_value, max_value], [min_value, max_value], color='#b94a48', linewidth=1.5)
-    plt.title('Actual vs predicted income in the tuned random forest')
-    plt.xlabel('Actual income (USD)')
-    plt.ylabel('Predicted income (USD)')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'actual_vs_predicted_income.png', dpi=150)
-    plt.close()
+    fig01_income_by_education(edu_s)
+    fig02_income_distribution_by_education(af)
+    fig03_income_by_region(reg_s)
+    fig04_income_trend_over_time(yr_s)
+    fig05_gender_income_gap(af)
+    fig06_gender_gap_by_education(gender_edu)
+    fig07_hypothesis_tests(stat_tests)
+    fig08_ols_coefficients(ols_s)
+    fig09_ols_diagnostics(mf, ols_base)
+    fig10_education_premium_by_quantile(ols_s, q_s, bootstrap_df)
+    fig11_model_comparison(comparison)
+    fig12_cross_validation(cv_df)
+    fig13_feature_importance(fi)
+    fig14_actual_vs_predicted(pred_frame)
 
 
-def print_summary(
-    analysis_frame: pd.DataFrame,
-    region_summary: pd.DataFrame,
-    statistical_tests: pd.DataFrame,
-    model_comparison: pd.DataFrame,
-    ols_summary: pd.DataFrame,
-    quantile_summary: pd.DataFrame,
-) -> None:
-    top_region = region_summary.iloc[0]
-    strongest_model = model_comparison.iloc[0]
-    ols_education_premium = float(
-        ols_summary.loc[ols_summary['term'] == 'education_level', 'approx_pct_effect'].iloc[0]
-    )
-    education_test_pvalue = float(statistical_tests.loc[statistical_tests['test_id'] == 'K1', 'p_value'].iloc[0])
-    low_quantile = float(quantile_summary.loc[quantile_summary['quantile'] == 0.25, 'education_pct_premium'].iloc[0])
-    high_quantile = float(quantile_summary.loc[quantile_summary['quantile'] == 0.75, 'education_pct_premium'].iloc[0])
+def print_summary(af, reg_s, stat_tests, comparison, ols_s, q_s, bootstrap_df) -> None:
+    top  = reg_s.iloc[0]
+    best = comparison.iloc[0]
+    edu_p = float(ols_s.loc[ols_s["term"] == "education_level", "pct_effect"].iloc[0])
+    q25   = float(q_s.loc[q_s["quantile"] == 0.25, "pct_premium"].iloc[0])
+    q75   = float(q_s.loc[q_s["quantile"] == 0.75, "pct_premium"].iloc[0])
+    bs_lo = np.percentile(bootstrap_df["pct_premium"], 2.5)
+    bs_hi = np.percentile(bootstrap_df["pct_premium"], 97.5)
 
-    print('=== Korea income and welfare summary ===')
-    print(f'Records analyzed: {len(analysis_frame):,}')
-    print(
-        'Top region by median income: '
-        f"{top_region['region_label']} ({top_region['median_income_usd']:.2f} USD)"
-    )
-    print(
-        'Best benchmark model: '
-        f"{strongest_model['model']} (R^2 = {strongest_model['r2']:.3f})"
-    )
-    print(f'Average education premium per step (OLS): {ols_education_premium:.2f}%')
-    print(f'Education distribution test p-value: {education_test_pvalue:.3g}')
-    print(f'Education premium at the 25th percentile: {low_quantile:.2f}%')
-    print(f'Education premium at the 75th percentile: {high_quantile:.2f}%')
+    print("=== Korea Income and Welfare — analysis summary ===")
+    print(f"Records analyzed:            {len(af):,}")
+    print(f"Top region (median income):  {top['region_label']} (${top['median_usd']:,.0f})")
+    print(f"Best model:                  {best['model']} (holdout R² = {best['r2']:.3f})")
+    print(f"OLS education premium:       {edu_p:.2f}% per step")
+    print(f"Bootstrap 95% CI:            [{bs_lo:.2f}%, {bs_hi:.2f}%]")
+    print(f"Quantile premium Q25 / Q75:  {q25:.2f}% / {q75:.2f}%")
+    print("Figures saved:               outputs/figures/ (14 files)")
+    print("Tables saved:                outputs/tables/ (13 files)")
 
 
 def main() -> None:
     args = parse_args()
     ensure_directories()
-    dataset = load_dataset(args.input_path)
-    analysis_frame = build_analysis_frame(dataset)
-    model_frame = build_model_frame(analysis_frame)
 
-    education_summary = build_education_summary(analysis_frame)
-    region_summary = build_region_summary(analysis_frame)
-    year_summary = build_year_summary(analysis_frame)
-    statistical_tests = build_statistical_tests(analysis_frame, model_frame)
-    model_comparison, feature_importance, best_params, prediction_frame, ml_cross_validation = run_models(model_frame)
-    ols_base_model, ols_model, quantile_models = run_econometric_models(model_frame)
-    ols_summary = build_ols_summary(ols_model)
-    econometric_diagnostics = build_econometric_diagnostics(ols_base_model)
-    econometric_vif = build_econometric_vif(model_frame)
-    quantile_summary = build_quantile_summary(quantile_models)
+    print("Loading data...")
+    df = load_dataset(args.input_path)
+    af = build_analysis_frame(df)
+    mf = build_model_frame(af)
 
+    print("Building summaries...")
+    edu_s      = build_education_summary(af)
+    reg_s      = build_region_summary(af)
+    yr_s       = build_year_summary(af)
+    gender_edu = build_gender_edu_summary(af)
+    stat_tests = build_statistical_tests(af)
+
+    print("Running ML models...")
+    comparison, fi, best_params, pred_frame, cv_df, best_model, Xts, yts = run_models(mf)
+
+    print("Running econometric models...")
+    ols_base, ols_hc3, qr = run_econometric_models(mf)
+    ols_s  = build_ols_summary(ols_hc3)
+    diag   = build_econometric_diagnostics(ols_base)
+    vif    = build_econometric_vif(mf)
+    q_s    = build_quantile_summary(qr)
+
+    print(f"Running bootstrap ({BOOTSTRAP_N} iterations)...")
+    bootstrap_df = build_bootstrap_education_premium(mf, BOOTSTRAP_N)
+
+    print("Exporting tables...")
     export_tables(
-        education_summary,
-        region_summary,
-        year_summary,
-        statistical_tests,
-        model_comparison,
-        feature_importance,
-        best_params,
-        ols_summary,
-        econometric_diagnostics,
-        econometric_vif,
-        quantile_summary,
-        ml_cross_validation,
+        edu_s, reg_s, yr_s, stat_tests,
+        comparison, fi, best_params,
+        ols_s, diag, vif, q_s, cv_df, bootstrap_df,
     )
+
+    print("Generating figures...")
     export_figures(
-        education_summary,
-        region_summary,
-        year_summary,
-        model_comparison,
-        feature_importance,
-        ols_summary,
-        quantile_summary,
-        prediction_frame,
-        ml_cross_validation,
-    )
-    print_summary(
-        analysis_frame,
-        region_summary,
-        statistical_tests,
-        model_comparison,
-        ols_summary,
-        quantile_summary,
+        edu_s, af, reg_s, yr_s, gender_edu,
+        stat_tests, ols_s, mf, ols_base,
+        q_s, bootstrap_df, comparison, cv_df, fi, pred_frame,
     )
 
+    print_summary(af, reg_s, stat_tests, comparison, ols_s, q_s, bootstrap_df)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

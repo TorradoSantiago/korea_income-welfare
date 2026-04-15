@@ -1,4 +1,4 @@
 model,parameter,value
-Tuned random forest,max_depth,16
-Tuned random forest,min_samples_leaf,3
-Tuned random forest,n_estimators,400
+Random Forest,max_depth,16
+Random Forest,min_samples_leaf,3
+Random Forest,n_estimators,400
